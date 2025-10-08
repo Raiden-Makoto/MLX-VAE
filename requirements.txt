@@ -36,6 +36,7 @@ nest-asyncio==1.6.0
 networkx==3.5
 numpy==1.26.4
 packaging==25.0
+pandas==2.3.3
 parso==0.8.5
 pennylane==0.42.3
 pennylane_lightning==0.42.0
@@ -51,6 +52,7 @@ pyg-lib==0.4.0+pt28
 Pygments==2.19.2
 pyparsing==3.2.5
 python-dateutil==2.9.0.post0
+pytz==2025.2
 pyzmq==27.1.0
 rdkit==2025.3.6
 rdkit-pypi==2022.9.5
@@ -75,6 +77,8 @@ tornado==6.5.2
 tqdm==4.67.1
 traitlets==5.14.3
 typing_extensions==4.15.0
+tzdata==2025.2
 urllib3==2.5.0
 wcwidth==0.2.14
+wget==3.2
 yarl==1.20.1
