@@ -20,6 +20,7 @@ ENV/
 QM9/
 checkpoints/
 logs/
+processed/
 
 # Python packaging
 *.egg-info/
@@ -30,3 +31,4 @@ build/
 .env
 .env.*
 .env
+
