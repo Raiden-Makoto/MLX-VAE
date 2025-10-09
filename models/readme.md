@@ -64,3 +64,22 @@ The PropertyPredictor is a simple multi-layer perceptron (MLP) that takes the la
 5. **Integration with MGCVAE**: In the forward of the full MGCVAE, after sampling $z$, we call `y_pred = self.property_predictor(z)`; the loss term $\gamma L_\text{prop} encourages the latent space to capture information predictive of these properties.
 
 This simple MLP on top of the learned latent space lets the VAE jointly learn to reconstruct molecular structure and to encode property-relevant features in $z$, enabling us to condition molecule generation on desired BBBP values.
+
+## Graph Decoder
+The GraphDecoder is the most complex component—it takes a latent vector $z$ plus target property conditions and reconstructs a molecular graph.
+
+#### How It Works:
+1. **Input Conditioning**: Takes latent vector $z$ from encoder. Concatenates with target properties (e.g., \[$BBBP=0.67$\]). Projects to hidden representation that "knows" what kind of molecule to generate.
+2. **Graph Size Prediction**: Predicts how many atoms the molecule should have. Outputs probability distribution over possible sizes (1 to `max_nodes`). Smaller molecules might be more likely for certain property targets.
+3. **Node Generation**: For each possible node position, predicts atom type probabilities. Uses one-hot encoding matching your dataset's node features. E.g., `[H, C, N, O, F, ...]` probabilities for each position.
+4. **Edge Generation**: For every pair of nodes (i,j), predicts: Existence probability: Should there be a bond between atoms $i$ and $j$? Bond type: if bond exists, what type? (single, double, triple, aromatic).Uses node features + positional context to make this decision.
+5. **Positional Awareness**: Adds learned positional embeddings to help with molecular topology. Different positions in the generation order can have different "roles."
+
+#### Key Considerations
+- **Autoregressive vs. One-Shot:** This is a "one-shot" decoder that generates all nodes/edges simultaneously, which is faster but potentially less flexible than autoregressive approaches.
+
+- **Conditioning Strategy:** Properties are injected at the input level and influence all generation decisions through the global context vector.
+
+- **Differentiable Sampling:** Uses Gumbel-Softmax and sigmoid probabilities to maintain differentiability during training while still producing discrete-like outputs.
+
+The decoder learns to map from the property-conditioned latent space to valid molecular structures that satisfy the target BBBP and toxicity constraints!
