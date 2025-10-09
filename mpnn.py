@@ -56,6 +56,90 @@ class MPNN(nn.Module):
         return torch.sigmoid(self.readout(hg)).view(-1)
 
 
+def smiles_to_graph(smiles):
+    """Convert a SMILES string to a PyTorch Geometric Data object.
+    
+    Args:
+        smiles: SMILES string representation of the molecule
+    
+    Returns:
+        Data object with molecular graph features or None if conversion fails
+    """
+    try:
+        mol = Chem.MolFromSmiles(smiles)
+        if mol is None:
+            print(f"Failed to parse SMILES: {smiles}")
+            return None
+        
+        # Add hydrogens (needed for correct atom features)
+        mol = Chem.AddHs(mol)
+        # Note: No 3D embedding needed - MPNN only uses 2D graph structure
+        
+        # Extract atom features
+        atom_features = []
+        for atom in mol.GetAtoms():
+            element = atom.GetSymbol()
+            degree = atom.GetDegree()
+            valence = atom.GetTotalValence()
+            numH = atom.GetTotalNumHs()
+            feat = [
+                float(element == symbol) for symbol in ["C","N","O","F","P","S","Cl","Br","I"]
+            ] + [degree, valence, numH]
+            atom_features.append(feat)
+        x = torch.tensor(atom_features, dtype=torch.float)
+        
+        # Extract edge features
+        edge_index, edge_attr = [], []
+        for bond in mol.GetBonds():
+            i, j = bond.GetBeginAtomIdx(), bond.GetEndAtomIdx()
+            bt = bond.GetBondType()
+            attr = [
+                float(bt == Chem.rdchem.BondType.SINGLE),
+                float(bt == Chem.rdchem.BondType.DOUBLE),
+                float(bt == Chem.rdchem.BondType.TRIPLE),
+                float(bond.GetIsConjugated())
+            ]
+            edge_index += [[i,j],[j,i]]
+            edge_attr += [attr, attr]
+        
+        edge_index = torch.tensor(edge_index, dtype=torch.long).t().contiguous()
+        edge_attr  = torch.tensor(edge_attr,  dtype=torch.float)
+        
+        return Data(x=x, edge_index=edge_index, edge_attr=edge_attr)
+    
+    except Exception as e:
+        print(f"Error converting SMILES {smiles}: {e}")
+        return None
+
+
+def predict_single_molecule(model, smiles, device='mps'):
+    """Run inference on a single molecule from SMILES string.
+    
+    Args:
+        model: Trained MPNN model
+        smiles: SMILES string representation of the molecule
+        device: Device to run inference on ('cpu', 'cuda', 'mps')
+    
+    Returns:
+        Prediction score (float) or None if conversion fails
+    """
+    # Convert SMILES to graph
+    data = smiles_to_graph(smiles)
+    if data is None:
+        return None
+    
+    # Add batch information (single molecule = batch index 0)
+    data.batch = torch.zeros(data.x.size(0), dtype=torch.long)
+    data = data.to(device)
+    
+    # Run inference
+    model.eval()
+    with torch.no_grad():
+        prediction = model(data)
+    
+    return prediction.item()
+
+
 def load_checkpoint(checkpoint_path, device='mps'):
     """Load a saved model checkpoint.
     
