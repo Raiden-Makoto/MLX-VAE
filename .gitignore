@@ -21,6 +21,8 @@ QM9/
 checkpoints/
 logs/
 processed/
+*.pt
+*.pth
 
 # Python packaging
 *.egg-info/
