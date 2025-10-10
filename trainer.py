@@ -45,8 +45,7 @@ class MGCVAETrainer:
             self.optimizer,
             mode='min',
             factor=0.5,
-            patience=15,
-            verbose=True
+            patience=15
         )
         
         # =====================================================================
