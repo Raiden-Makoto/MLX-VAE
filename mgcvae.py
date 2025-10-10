@@ -163,6 +163,10 @@ class MGCVAE(nn.Module):
         batch_idx = batch.batch
         true_properties = batch.y
         
+        # Ensure true_properties has shape [batch_size, num_properties]
+        if true_properties.dim() == 1:
+            true_properties = true_properties.unsqueeze(-1)
+        
         # =====================================================================
         # Encoding Phase
         # =====================================================================
@@ -270,64 +274,145 @@ class MGCVAE(nn.Module):
     
     
     def _compute_node_reconstruction_loss(self, batch, decoder_output, batch_size):
-        """Compute loss for node reconstruction"""
-        node_logits = decoder_output['node_logits']
-        target_nodes = self._prepare_node_targets(batch, batch_size)
+        """
+        Compute loss for node reconstruction
         
-        # Cross-entropy loss for categorical node features
-        loss = F.cross_entropy(
-            node_logits.view(-1, self.node_dim),
-            target_nodes.view(-1).long(),
-            reduction='mean'
-        )
+        Maps variable-size real graphs to fixed-size decoder predictions with masking
+        """
+        node_logits = decoder_output['node_logits']  # [batch_size, max_nodes, node_dim]
+        
+        # Create target node features for each graph in batch
+        # We'll use a simplified approach: discretize the first feature dimension
+        target_nodes = torch.zeros(batch_size, self.max_nodes, dtype=torch.long, device=batch.x.device)
+        masks = torch.zeros(batch_size, self.max_nodes, dtype=torch.bool, device=batch.x.device)
+        
+        # Fill in actual node features from batch
+        node_ptr = 0  # Pointer to current position in batch.x
+        for i in range(batch_size):
+            # Count nodes in this graph
+            graph_size = (batch.batch == i).sum().item()
+            graph_size = min(graph_size, self.max_nodes)  # Cap at max_nodes
+            
+            # Extract node features for this graph
+            graph_nodes = batch.x[node_ptr:node_ptr + graph_size]
+            
+            # Convert continuous features to discrete indices (simplified)
+            # Use argmax of first 10 dimensions (atom type one-hot)
+            node_indices = torch.argmax(graph_nodes[:, :10], dim=1)
+            
+            # Fill in targets and mask
+            target_nodes[i, :graph_size] = node_indices
+            masks[i, :graph_size] = True
+            
+            node_ptr += (batch.batch == i).sum().item()
+        
+        # Compute masked cross-entropy loss
+        node_logits_flat = node_logits.view(-1, self.node_dim)
+        target_nodes_flat = target_nodes.view(-1)
+        masks_flat = masks.view(-1)
+        
+        # Only compute loss on actual nodes (not padding)
+        if masks_flat.sum() > 0:
+            # Use first 10 dimensions of logits (atom types)
+            loss = F.cross_entropy(
+                node_logits_flat[masks_flat, :10],
+                target_nodes_flat[masks_flat],
+                reduction='mean'
+            )
+        else:
+            loss = torch.tensor(0.0, device=batch.x.device)
         
         return loss
     
     
     def _compute_edge_reconstruction_loss(self, batch, decoder_output, batch_size):
-        """Compute loss for edge reconstruction"""
-        edge_logits = decoder_output['edge_logits']
+        """
+        Compute loss for edge reconstruction
+        
+        Maps real edges to decoder's fixed-size edge predictions
+        """
+        edge_logits = decoder_output['edge_logits']  # [batch_size, num_possible_edges, edge_dim+1]
+        edge_indices = decoder_output['edge_indices']  # [num_possible_edges, 2]
         
         if edge_logits.size(1) == 0:
-            return torch.tensor(0.0, device=edge_logits.device)
+            return torch.tensor(0.0, device=batch.x.device)
         
-        target_edges = self._prepare_edge_targets(batch, decoder_output, batch_size)
+        # Create adjacency matrix for each graph in batch
+        num_possible_edges = edge_indices.size(0)
+        target_edge_exist = torch.zeros(batch_size, num_possible_edges, device=batch.x.device)
+        target_edge_type = torch.zeros(batch_size, num_possible_edges, dtype=torch.long, device=batch.x.device)
         
+        # Process each graph in batch
+        node_offset = 0
+        for b in range(batch_size):
+            # Get edges for this graph
+            graph_size = (batch.batch == b).sum().item()
+            graph_size = min(graph_size, self.max_nodes)
+            
+            # Get real edges for this graph
+            graph_edge_mask = (batch.batch[batch.edge_index[0]] == b)
+            graph_edges = batch.edge_index[:, graph_edge_mask]
+            
+            # Offset edges to be relative to this graph
+            graph_edges = graph_edges - node_offset
+            
+            if hasattr(batch, 'edge_attr'):
+                graph_edge_attr = batch.edge_attr[graph_edge_mask]
+            else:
+                graph_edge_attr = None
+            
+            # Match real edges to decoder's edge predictions
+            for edge_idx in range(num_possible_edges):
+                i, j = edge_indices[edge_idx]
+                
+                # Skip if outside this graph's size
+                if i >= graph_size or j >= graph_size:
+                    continue
+                
+                # Check if this edge exists in real graph
+                edge_exists = False
+                if graph_edges.size(1) > 0:
+                    # Look for edge (i,j) or (j,i)
+                    matches = ((graph_edges[0] == i) & (graph_edges[1] == j)) | \
+                             ((graph_edges[0] == j) & (graph_edges[1] == i))
+                    
+                    if matches.any():
+                        edge_exists = True
+                        match_idx = torch.where(matches)[0][0]
+                        
+                        # Get edge type (first 4 dimensions are bond type one-hot)
+                        if graph_edge_attr is not None:
+                            edge_type = torch.argmax(graph_edge_attr[match_idx, :4])
+                            target_edge_type[b, edge_idx] = edge_type
+                
+                target_edge_exist[b, edge_idx] = 1.0 if edge_exists else 0.0
+            
+            node_offset += (batch.batch == b).sum().item()
+        
+        # Compute losses
         # Binary cross-entropy for edge existence
         edge_exist_loss = F.binary_cross_entropy_with_logits(
             edge_logits[:, :, -1],
-            target_edges[:, :, -1]
-        )
-        
-        # Categorical cross-entropy for edge types
-        edge_type_loss = F.cross_entropy(
-            edge_logits[:, :, :-1].reshape(-1, self.edge_dim),
-            target_edges[:, :, :-1].reshape(-1).long(),
+            target_edge_exist,
             reduction='mean'
         )
         
+        # Categorical cross-entropy for edge types (only on existing edges)
+        existing_edges_mask = target_edge_exist > 0.5
+        if existing_edges_mask.sum() > 0:
+            edge_type_logits = edge_logits[:, :, :4].reshape(-1, 4)  # First 4 dims are bond type
+            target_types = target_edge_type.reshape(-1)
+            mask_flat = existing_edges_mask.reshape(-1)
+            
+            edge_type_loss = F.cross_entropy(
+                edge_type_logits[mask_flat],
+                target_types[mask_flat],
+                reduction='mean'
+            )
+        else:
+            edge_type_loss = torch.tensor(0.0, device=batch.x.device)
+        
         return edge_exist_loss + edge_type_loss
-    
-    
-    def _prepare_node_targets(self, batch, batch_size):
-        """
-        Prepare node targets for reconstruction loss
-        
-        Note: Simplified version - maps continuous features to discrete categories
-        """
-        # TODO: Implement proper feature discretization
-        return torch.zeros(batch_size, self.max_nodes, device=batch.x.device)
-    
-    
-    def _prepare_edge_targets(self, batch, decoder_output, batch_size):
-        """
-        Prepare edge targets for reconstruction loss
-        
-        Note: Simplified version - maps real edges to decoder format
-        """
-        # TODO: Implement proper edge target preparation
-        num_edges = decoder_output['edge_logits'].size(1)
-        return torch.zeros(batch_size, num_edges, self.edge_dim + 1, device=batch.x.device)
     
     
     def generate(self, target_properties, num_samples=1, temperature=1.0, device='cpu'):
