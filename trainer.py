@@ -185,10 +185,14 @@ class MGCVAETrainer:
                 'node_dim': self.model.node_dim,
                 'edge_dim': self.model.edge_dim,
                 'latent_dim': self.model.latent_dim,
+                'hidden_dim': self.model.encoder.hidden_dim,
                 'num_properties': self.model.num_properties,
+                'num_layers': self.model.encoder.num_layers,
+                'heads': self.model.encoder.heads,
                 'max_nodes': self.model.max_nodes,
                 'beta': self.model.beta,
-                'gamma': self.model.gamma
+                'gamma': self.model.gamma,
+                'dropout': self.model.encoder.dropout
             }
         }
         
