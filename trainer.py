@@ -267,14 +267,21 @@ class MGCVAETrainer:
         plt.show()
     
     
-    def train(self, num_epochs=30):
-        """Full training loop"""
-        print(f"Starting MGCVAE training for {num_epochs} epochs")
+    def train(self, num_epochs=30, start_epoch=1):
+        """
+        Full training loop
+        
+        Args:
+            num_epochs: Number of epochs to train for
+            start_epoch: Epoch to start from (default: 1, useful for resuming training)
+        """
+        end_epoch = start_epoch + num_epochs - 1
+        print(f"Starting MGCVAE training from epoch {start_epoch} to {end_epoch}")
         print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
         print(f"Device: {self.device}")
         
-        for epoch in range(num_epochs):
-            print(f"\nEpoch {epoch + 1}/{num_epochs}")
+        for epoch in range(start_epoch, start_epoch + num_epochs):
+            print(f"\nEpoch {epoch}/{end_epoch}")
             
             # =====================================================================
             # Training and Validation
@@ -301,7 +308,7 @@ class MGCVAETrainer:
             if val_losses['total'] < self.best_val_loss:
                 self.best_val_loss = val_losses['total']
                 self.patience_counter = 0
-                self.save_checkpoint(epoch + 1, is_best=True)
+                self.save_checkpoint(epoch, is_best=True)
             else:
                 self.patience_counter += 1
             
@@ -309,8 +316,8 @@ class MGCVAETrainer:
             # Regular Checkpointing
             # =====================================================================
             
-            if (epoch + 1) % 10 == 0:
-                self.save_checkpoint(epoch + 1)
+            if epoch % 10 == 0:
+                self.save_checkpoint(epoch)
             
             # =====================================================================
             # Epoch Summary
@@ -325,14 +332,14 @@ class MGCVAETrainer:
             # =====================================================================
             
             if self.patience_counter >= self.max_patience:
-                print(f"Early stopping after {epoch + 1} epochs")
+                print(f"Early stopping after epoch {epoch}")
                 break
         
         # =====================================================================
         # Training Completion
         # =====================================================================
         
-        self.save_checkpoint(epoch + 1)
+        self.save_checkpoint(epoch)
         self.plot_training_curves(os.path.join(self.save_dir, 'training_curves.png'))
         
         print("Training completed!")
