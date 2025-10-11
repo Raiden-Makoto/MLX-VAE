@@ -8,15 +8,18 @@ from mgcvae import MGCVAE
 
 def load_from_checkpoint(checkpoint_path, device='mps'):
     """
-    Load MGCVAE model from checkpoint
+    Load MGCVAE model from checkpoint with optimizer and scheduler states
     
     Args:
         checkpoint_path: Path to checkpoint .pth file
         device: Device to load model on
     
     Returns:
-        model: Loaded MGCVAE model
-        checkpoint: Full checkpoint dictionary (optimizer state, metrics, etc.)
+        tuple: (model, optimizer_state, scheduler_state, checkpoint)
+            - model: Loaded MGCVAE model
+            - optimizer_state: Optimizer state dict
+            - scheduler_state: Scheduler state dict
+            - checkpoint: Full checkpoint dictionary (for metrics, epoch, etc.)
     """
     checkpoint = torch.load(checkpoint_path, map_location=device, weights_only=False)
     
@@ -38,10 +41,10 @@ def load_from_checkpoint(checkpoint_path, device='mps'):
         dropout=config.get('dropout', 0.1)        # Default if not in old checkpoints
     ).to(device)
     
-    # Load weights
+    # Load model weights
     model.load_state_dict(checkpoint['model_state_dict'])
     
     print(f"Model loaded from {checkpoint_path}")
     print(f"Epoch: {checkpoint['epoch']}, Best Val Loss: {checkpoint['best_val_loss']:.4f}")
     
-    return model, checkpoint
+    return model, checkpoint['optimizer_state_dict'], checkpoint['scheduler_state_dict'], checkpoint

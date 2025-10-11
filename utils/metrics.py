@@ -141,7 +141,7 @@ def evaluate_conditioning_latent(model, target, num_samples=100, tolerance=0.1, 
 
     Args:
         model: Trained MGCVAE model.
-        target: List or array [BBBP, toxicity] target values.
+        target: List or array of target property values (e.g., [BBBP] or [BBBP, toxicity]).
         num_samples: Number of latent samples to draw.
         tolerance: Acceptable deviation from target.
         device: 'mps' or 'cpu'.
@@ -154,7 +154,7 @@ def evaluate_conditioning_latent(model, target, num_samples=100, tolerance=0.1, 
           - std_pred: std dev of predicted properties.
     """
     model.eval()
-    target = np.array(target, dtype=float)
+    target = np.array(target, dtype=float).reshape(1, -1)  # Ensure 2D shape
 
     # 1. Sample latent codes
     z = torch.randn(num_samples, model.latent_dim, device=device)
@@ -165,7 +165,9 @@ def evaluate_conditioning_latent(model, target, num_samples=100, tolerance=0.1, 
 
     # 3. Compute metrics
     diffs = np.abs(preds - target)
-    within = np.logical_and(diffs[:, 0] <= tolerance, diffs[:, 1] <= tolerance)
+    
+    # Check if all properties are within tolerance
+    within = np.all(diffs <= tolerance, axis=1)
     success_rate = within.sum() / num_samples * 100
     mae = diffs.mean()
 
@@ -173,7 +175,7 @@ def evaluate_conditioning_latent(model, target, num_samples=100, tolerance=0.1, 
     std_pred = preds.std(axis=0).tolist()
 
     print(f"Conditioning Evaluation (latent):")
-    print(f"Target:            {target.tolist()}")
+    print(f"Target:            {target.flatten().tolist()}")
     print(f"Success rate:      {success_rate:.1f}% within ±{tolerance}")
     print(f"Mean absolute err: {mae:.4f}")
     print(f"Predicted mean:    {mean_pred}")

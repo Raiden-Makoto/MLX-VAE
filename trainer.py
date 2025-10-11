@@ -169,6 +169,32 @@ class MGCVAETrainer:
         return epoch_losses
     
     
+    def load_optimizer_scheduler(self, optimizer_state, scheduler_state):
+        """
+        Load optimizer and scheduler states (for resuming training)
+        
+        Args:
+            optimizer_state: Optimizer state dict from checkpoint
+            scheduler_state: Scheduler state dict from checkpoint
+        """
+        self.optimizer.load_state_dict(optimizer_state)
+        self.scheduler.load_state_dict(scheduler_state)
+        print("Optimizer and scheduler states loaded")
+    
+    
+    def load_training_history(self, checkpoint):
+        """
+        Load training history from checkpoint (for resuming training)
+        
+        Args:
+            checkpoint: Checkpoint dictionary with training history
+        """
+        self.train_metrics = checkpoint['train_metrics']
+        self.val_metrics = checkpoint['val_metrics']
+        self.best_val_loss = checkpoint['best_val_loss']
+        print("Training history loaded")
+    
+    
     def save_checkpoint(self, epoch, is_best=False):
         """Save model checkpoint"""
         checkpoint = {

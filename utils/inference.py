@@ -166,10 +166,7 @@ def batch_logits_to_molecules(sampled_graphs, validity_check=True):
 # =============================================================================
 
 def evaluate_generation_quality(
-    model,
-    target_properties,
-    num_samples=100,
-    device='mps'
+    molecules
 ):
     """
     Comprehensive evaluation of generated molecules
@@ -183,26 +180,7 @@ def evaluate_generation_quality(
     Returns:
         dict: Evaluation metrics
     """
-    model.eval()
-    
-    # =========================================================================
-    # Generate Molecules
-    # =========================================================================
-    
-    with torch.no_grad():
-        sampled_graphs = model.generate(
-            target_properties=target_properties,
-            num_samples=num_samples,
-            temperature=0.8,
-            device=device
-        )
-    
-    # =========================================================================
-    # Convert to Molecules
-    # =========================================================================
-    
-    molecules = batch_logits_to_molecules(sampled_graphs, validity_check=True)
-    
+
     # =========================================================================
     # Calculate Metrics
     # =========================================================================
@@ -224,10 +202,9 @@ def evaluate_generation_quality(
         'num_valid': len(valid_molecules),
         'valid_smiles': valid_smiles,
         'avg_molecule_size': avg_size,
-        'target_properties': target_properties
     }
     
-    print(f"Generation Results for target {target_properties}:")
+    print(f"Generation Results:")
     print(f"Validity: {validity:.1f}%")
     print(f"Uniqueness: {uniqueness:.1f}%") 
     print(f"Avg molecule size: {avg_size:.1f} atoms")
