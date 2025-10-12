@@ -34,7 +34,7 @@ This project combines **variational autoencoders** (VAEs) with **graph neural ne
 
 ## Dataset
 
-The training data consists of 2,142 molecules sampled from the QM9 dataset. Each molecule is:
+The training data consists of 6,768 molecules sampled from the QM9 dataset. Each molecule is:
 - Represented as a graph with 29-dimensional atom features and 6-dimensional bond features
 - Labeled with BBB permeability scores predicted by the pre-trained MPNN model
 - Stored as `mlx_graphs.data.GraphData` objects for efficient processing
