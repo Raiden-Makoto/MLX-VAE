@@ -1,17 +1,22 @@
 import os
 from datetime import datetime
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-from torch.optim.lr_scheduler import ReduceLROnPlateau, CosineAnnealingLR
+import mlx.core as mx
+import mlx.nn as nn
+import mlx.optimizers as optim
+from mlx.utils import tree_flatten
 import matplotlib.pyplot as plt
 import numpy as np
 from tqdm import tqdm
 
+from mlx_data.mlx_dataset import QM9GraphDataset  # type: ignore
+from mlx_models.mlx_vae import MLXMGCVAE  # type: ignore
+from mlx_graphs.loaders import Dataloader  # type: ignore
+from sklearn.model_selection import train_test_split  # type: ignore
 
-class MGCVAETrainer:
-    """Training class for MGCVAE with comprehensive logging and checkpointing"""
+
+class MLXMGCVAETrainer:
+    """Training class for MLXMGCVAE with comprehensive logging and checkpointing"""
     
     def __init__(
         self,
@@ -20,14 +25,12 @@ class MGCVAETrainer:
         val_loader,
         test_loader,
         lr=1e-3,
-        device='cpu',
-        save_dir='checkpoints'
+        save_dir='checkpoints/mlx_mgcvae'
     ):
-        self.model = model.to(device)
+        self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.test_loader = test_loader
-        self.device = device
         self.save_dir = save_dir
         
         # =====================================================================
@@ -37,23 +40,15 @@ class MGCVAETrainer:
         os.makedirs(save_dir, exist_ok=True)
         
         # =====================================================================
-        # Optimizer and Scheduler
+        # Optimizer
         # =====================================================================
         
-        self.optimizer = optim.Adam(model.parameters(), lr=lr, weight_decay=1e-5)
-        self.scheduler = ReduceLROnPlateau(
-            self.optimizer,
-            mode='min',
-            factor=0.5,
-            patience=15
-        )
+        self.optimizer = optim.Adam(learning_rate=lr)
+        self.initial_lr = lr
         
         # =====================================================================
         # Training History
         # =====================================================================
-        
-        self.train_losses = []
-        self.val_losses = []
         
         self.train_metrics = {
             'reconstruction': [],
@@ -76,7 +71,7 @@ class MGCVAETrainer:
         self.best_val_loss = float('inf')
         self.patience_counter = 0
         self.max_patience = 30
-    
+        self.best_model_weights = None
     
     def train_epoch(self):
         """Train for one epoch"""
@@ -92,27 +87,31 @@ class MGCVAETrainer:
         
         pbar = tqdm(self.train_loader, desc='Training')
         
+        # Define loss and gradient function
+        def compute_loss(batch):
+            output = self.model(batch)
+            losses = self.model.compute_loss(batch, output)
+            return losses['total_loss']
+        
+        loss_and_grad_fn = nn.value_and_grad(self.model, compute_loss)
+        
         for batch in pbar:
-            batch = batch.to(self.device)
-            
             # =====================================================================
-            # Forward Pass
+            # Forward and Backward Pass
             # =====================================================================
             
-            self.optimizer.zero_grad()
-            model_output = self.model(batch)
-            loss_dict = self.model.compute_loss(batch, model_output)
+            loss, grads = loss_and_grad_fn(batch)
+            
+            # Update model parameters
+            self.optimizer.update(self.model, grads)
+            mx.eval(self.model.parameters())
             
             # =====================================================================
-            # Backward Pass
+            # Compute Full Losses for Logging
             # =====================================================================
             
-            loss_dict['total_loss'].backward()
-            
-            # Gradient clipping for stability
-            torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-            
-            self.optimizer.step()
+            output = self.model(batch)
+            loss_dict = self.model.compute_loss(batch, output)
             
             # =====================================================================
             # Accumulate Losses
@@ -136,7 +135,6 @@ class MGCVAETrainer:
         
         return epoch_losses
     
-    
     def validate_epoch(self):
         """Validate for one epoch"""
         self.model.eval()
@@ -149,18 +147,15 @@ class MGCVAETrainer:
         }
         num_batches = 0
         
-        with torch.no_grad():
-            for batch in tqdm(self.val_loader, desc='Validation'):
-                batch = batch.to(self.device)
-                
-                # Forward pass (no gradients)
-                model_output = self.model(batch)
-                loss_dict = self.model.compute_loss(batch, model_output)
-                
-                # Accumulate losses
-                for key in epoch_losses:
-                    epoch_losses[key] += loss_dict[f'{key}_loss'].item()
-                num_batches += 1
+        for batch in tqdm(self.val_loader, desc='Validation'):
+            # Forward pass (no gradients)
+            output = self.model(batch)
+            loss_dict = self.model.compute_loss(batch, output)
+            
+            # Accumulate losses
+            for key in epoch_losses:
+                epoch_losses[key] += loss_dict[f'{key}_loss'].item()
+            num_batches += 1
         
         # Average losses over batches
         for key in epoch_losses:
@@ -168,70 +163,47 @@ class MGCVAETrainer:
         
         return epoch_losses
     
-    
-    def load_optimizer_scheduler(self, optimizer_state, scheduler_state):
-        """
-        Load optimizer and scheduler states (for resuming training)
-        
-        Args:
-            optimizer_state: Optimizer state dict from checkpoint
-            scheduler_state: Scheduler state dict from checkpoint
-        """
-        self.optimizer.load_state_dict(optimizer_state)
-        self.scheduler.load_state_dict(scheduler_state)
-        print("Optimizer and scheduler states loaded")
-    
-    
-    def load_training_history(self, checkpoint):
-        """
-        Load training history from checkpoint (for resuming training)
-        
-        Args:
-            checkpoint: Checkpoint dictionary with training history
-        """
-        self.train_metrics = checkpoint['train_metrics']
-        self.val_metrics = checkpoint['val_metrics']
-        self.best_val_loss = checkpoint['best_val_loss']
-        print("Training history loaded")
-    
-    
     def save_checkpoint(self, epoch, is_best=False):
         """Save model checkpoint"""
-        checkpoint = {
+        flat_params = tree_flatten(self.model.parameters())
+        
+        # Save model parameters
+        checkpoint_path = os.path.join(self.save_dir, f'checkpoint_epoch_{epoch}.npz')
+        mx.savez(checkpoint_path, **dict(flat_params))
+        
+        # Save metadata
+        metadata = {
             'epoch': epoch,
-            'model_state_dict': self.model.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict(),
-            'scheduler_state_dict': self.scheduler.state_dict(),
-            'train_losses': self.train_losses,
-            'val_losses': self.val_losses,
-            'train_metrics': self.train_metrics,
-            'val_metrics': self.val_metrics,
-            'best_val_loss': self.best_val_loss,
+            'best_val_loss': float(self.best_val_loss),
+            'train_metrics': {k: [float(v) for v in vals] for k, vals in self.train_metrics.items()},
+            'val_metrics': {k: [float(v) for v in vals] for k, vals in self.val_metrics.items()},
             'model_config': {
                 'node_dim': self.model.node_dim,
                 'edge_dim': self.model.edge_dim,
                 'latent_dim': self.model.latent_dim,
-                'hidden_dim': self.model.encoder.hidden_dim,
                 'num_properties': self.model.num_properties,
-                'num_layers': self.model.encoder.num_layers,
-                'heads': self.model.encoder.heads,
                 'max_nodes': self.model.max_nodes,
-                'beta': self.model.beta,
-                'gamma': self.model.gamma,
-                'dropout': self.model.encoder.dropout
-            }
+                'beta': float(self.model.beta),
+                'gamma': float(self.model.gamma),
+            },
+            'timestamp': datetime.now().isoformat()
         }
         
-        # Save regular checkpoint
-        checkpoint_path = os.path.join(self.save_dir, f'checkpoint_epoch_{epoch}.pth')
-        torch.save(checkpoint, checkpoint_path)
+        import json
+        metadata_path = checkpoint_path.replace('.npz', '_metadata.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
         
         # Save best model
         if is_best:
-            best_path = os.path.join(self.save_dir, 'best_model.pth')
-            torch.save(checkpoint, best_path)
+            best_path = os.path.join(self.save_dir, 'best_model.npz')
+            mx.savez(best_path, **dict(flat_params))
+            
+            best_metadata_path = best_path.replace('.npz', '_metadata.json')
+            with open(best_metadata_path, 'w') as f:
+                json.dump(metadata, f, indent=2)
+            
             print(f"New best model saved! Val loss: {self.best_val_loss:.4f}")
-    
     
     def plot_training_curves(self, save_path=None):
         """Plot training and validation curves"""
@@ -292,7 +264,6 @@ class MGCVAETrainer:
         
         plt.show()
     
-    
     def train(self, num_epochs=30, start_epoch=1):
         """
         Full training loop
@@ -302,9 +273,11 @@ class MGCVAETrainer:
             start_epoch: Epoch to start from (default: 1, useful for resuming training)
         """
         end_epoch = start_epoch + num_epochs - 1
-        print(f"Starting MGCVAE training from epoch {start_epoch} to {end_epoch}")
-        print(f"Model parameters: {sum(p.numel() for p in self.model.parameters()):,}")
-        print(f"Device: {self.device}")
+        print(f"Starting MLXMGCVAE training from epoch {start_epoch} to {end_epoch}")
+        
+        # Count parameters
+        total_params = sum(x.size for k, x in tree_flatten(self.model.parameters()))
+        print(f"Model parameters: {total_params:,}")
         
         for epoch in range(start_epoch, start_epoch + num_epochs):
             print(f"\nEpoch {epoch}/{end_epoch}")
@@ -322,18 +295,13 @@ class MGCVAETrainer:
                 self.val_metrics[key].append(val_losses[key])
             
             # =====================================================================
-            # Learning Rate Scheduling
-            # =====================================================================
-            
-            self.scheduler.step(val_losses['total'])
-            
-            # =====================================================================
             # Early Stopping Check
             # =====================================================================
             
             if val_losses['total'] < self.best_val_loss:
                 self.best_val_loss = val_losses['total']
                 self.patience_counter = 0
+                self.best_model_weights = {k: v.copy() for k, v in self.model.parameters().items()}
                 self.save_checkpoint(epoch, is_best=True)
             else:
                 self.patience_counter += 1
@@ -351,7 +319,7 @@ class MGCVAETrainer:
             
             print(f"Train Loss: {train_losses['total']:.4f} | Val Loss: {val_losses['total']:.4f}")
             print(f"Recon: {train_losses['reconstruction']:.4f} | KL: {train_losses['kl']:.4f} | Prop: {train_losses['property']:.4f}")
-            print(f"LR: {self.optimizer.param_groups[0]['lr']:.2e} | Patience: {self.patience_counter}/{self.max_patience}")
+            print(f"LR: {self.optimizer.learning_rate.item():.2e} | Patience: {self.patience_counter}/{self.max_patience}")
             
             # =====================================================================
             # Early Stopping
@@ -370,3 +338,168 @@ class MGCVAETrainer:
         
         print("Training completed!")
         return self.train_metrics, self.val_metrics
+
+
+# =============================================================================
+# Main Training Script
+# =============================================================================
+
+if __name__ == '__main__':
+    print("="*70)
+    print("MLXMGCVAE Training Script")
+    print("="*70)
+    
+    # =========================================================================
+    # Load Dataset
+    # =========================================================================
+    
+    print("\n[1] Loading dataset...")
+    dataset = QM9GraphDataset(
+        csv_path="data/qm9_bbbp2.csv",
+        smiles_col="smiles",
+        label_col="p_np"
+    )
+    
+    # Split dataset
+    train_graphs, other_graphs = train_test_split(
+        dataset._graphs, 
+        test_size=0.2, 
+        random_state=67
+    )
+    val_graphs, test_graphs = train_test_split(
+        other_graphs, 
+        test_size=0.5, 
+        random_state=67
+    )
+    
+    print(f"  Train dataset size: {len(train_graphs)}")
+    print(f"  Validation dataset size: {len(val_graphs)}")
+    print(f"  Test dataset size: {len(test_graphs)}")
+    
+    # =========================================================================
+    # Create Data Loaders
+    # =========================================================================
+    
+    print("\n[2] Creating data loaders...")
+    batch_size = 32
+    
+    train_loader = Dataloader(train_graphs, batch_size=batch_size, shuffle=True)
+    val_loader = Dataloader(val_graphs, batch_size=batch_size, shuffle=False)
+    test_loader = Dataloader(test_graphs, batch_size=batch_size, shuffle=False)
+    
+    print(f"  Batch size: {batch_size}")
+    print(f"  Train batches: {len(train_loader)}")
+    print(f"  Val batches: {len(val_loader)}")
+    print(f"  Test batches: {len(test_loader)}")
+    
+    # =========================================================================
+    # Initialize Model
+    # =========================================================================
+    
+    print("\n[3] Initializing model...")
+    
+    model_config = {
+        'node_dim': 29,      # QM9 atom features
+        'edge_dim': 6,       # Bond features
+        'latent_dim': 32,
+        'hidden_dim': 64,
+        'num_properties': 1, # Single property (BBBP)
+        'num_layers': 2,
+        'heads': 4,
+        'max_nodes': 20,
+        'beta': 0.01,        # KL divergence weight
+        'gamma': 1.0,        # Property prediction weight
+        'dropout': 0.1
+    }
+    
+    model = MLXMGCVAE(**model_config)
+    
+    print("  Model configuration:")
+    for key, value in model_config.items():
+        print(f"    {key}: {value}")
+    
+    # Count parameters
+    total_params = sum(x.size for k, x in tree_flatten(model.parameters()))
+    print(f"  Total parameters: {total_params:,}")
+    
+    # =========================================================================
+    # Initialize Trainer
+    # =========================================================================
+    
+    print("\n[4] Setting up trainer...")
+    
+    trainer = MLXMGCVAETrainer(
+        model=model,
+        train_loader=train_loader,
+        val_loader=val_loader,
+        test_loader=test_loader,
+        lr=1e-3,
+        save_dir='checkpoints/mlx_mgcvae'
+    )
+    
+    print(f"  Learning rate: {trainer.initial_lr:.2e}")
+    print(f"  Early stopping patience: {trainer.max_patience}")
+    print(f"  Save directory: {trainer.save_dir}")
+    
+    # =========================================================================
+    # Train Model
+    # =========================================================================
+    
+    print("\n[5] Starting training...")
+    print("="*70)
+    
+    num_epochs = 10
+    train_metrics, val_metrics = trainer.train(
+        num_epochs=num_epochs,
+        start_epoch=1
+    )
+    
+    # =========================================================================
+    # Restore Best Model and Evaluate
+    # =========================================================================
+    
+    print("\n" + "="*70)
+    print("Final Evaluation")
+    print("="*70)
+    
+    if trainer.best_model_weights is not None:
+        print("\n✓ Restoring best model weights...")
+        model.update(trainer.best_model_weights)
+        print(f"  Best validation loss: {trainer.best_val_loss:.4f}")
+    
+    # =========================================================================
+    # Test Set Evaluation
+    # =========================================================================
+    
+    print("\nEvaluating on test set...")
+    model.eval()
+    
+    test_losses = {
+        'total': 0,
+        'reconstruction': 0,
+        'kl': 0,
+        'property': 0
+    }
+    test_batches = 0
+    
+    for batch in tqdm(test_loader, desc='Testing'):
+        output = model(batch)
+        loss_dict = model.compute_loss(batch, output)
+        
+        for key in test_losses:
+            test_losses[key] += loss_dict[f'{key}_loss'].item()
+        test_batches += 1
+    
+    # Average test losses
+    for key in test_losses:
+        test_losses[key] /= test_batches
+    
+    print("\nFinal Test Results:")
+    print(f"  Total Loss:         {test_losses['total']:.4f}")
+    print(f"  Reconstruction:     {test_losses['reconstruction']:.4f}")
+    print(f"  KL Divergence:      {test_losses['kl']:.4f}")
+    print(f"  Property Loss:      {test_losses['property']:.4f}")
+    
+    print("\n" + "="*70)
+    print("Training completed successfully!")
+    print("="*70)
