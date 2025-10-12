@@ -76,7 +76,8 @@ class MLXGraphEncoder(nn.Module):
         
         for i, (gat, bn) in enumerate(zip(self.gat_layers, self.batch_norms)):
             h_input = h
-            h = gat(h, edge_index, edge_attr=edge_emb)
+            # mlx_graphs GATConv API: (edge_index, node_features, edge_features)
+            h = gat(edge_index, h, edge_emb)
             h = bn(h)
             if i > 0 and h.shape[-1] == h_input.shape[-1]:
                 h = h + h_input
