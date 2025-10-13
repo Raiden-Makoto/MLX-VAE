@@ -243,7 +243,7 @@ class MLXMGCVAETrainer:
             
             print(f"New best model saved! Val loss: {self.best_val_loss:.4f}")
     
-    def plot_training_curves(self, save_path=None):
+    def plot_training_curves(self, save_path=None, show_plot=True):
         """Plot training and validation curves"""
         fig, axes = plt.subplots(2, 2, figsize=(12, 8))
         
@@ -299,16 +299,21 @@ class MLXMGCVAETrainer:
         
         if save_path:
             plt.savefig(save_path, dpi=150, bbox_inches='tight')
+            print(f"Training curves saved to: {save_path}")
         
-        plt.show()
+        if show_plot:
+            plt.show()
+        else:
+            plt.close(fig)
     
-    def train(self, num_epochs=30, start_epoch=1):
+    def train(self, num_epochs=30, start_epoch=1, show_plot=True):
         """
         Full training loop
         
         Args:
             num_epochs: Number of epochs to train for
             start_epoch: Epoch to start from (default: 1, useful for resuming training)
+            show_plot: Whether to display training curves plot (default: True)
         """
         end_epoch = start_epoch + num_epochs - 1
         print(f"Starting MLXMGCVAE training from epoch {start_epoch} to {end_epoch}")
@@ -372,7 +377,10 @@ class MLXMGCVAETrainer:
         # =====================================================================
         
         self.save_checkpoint(epoch)
-        self.plot_training_curves(os.path.join(self.save_dir, 'training_curves.png'))
+        self.plot_training_curves(
+            os.path.join(self.save_dir, 'training_curves.png'),
+            show_plot=show_plot
+        )
         
         print("Training completed!")
         return self.train_metrics, self.val_metrics
@@ -396,6 +404,8 @@ if __name__ == '__main__':
                         help='Batch size for training')
     parser.add_argument('--lr', type=float, default=1e-3,
                         help='Learning rate')
+    parser.add_argument('--no-plot', action='store_true',
+                        help='Disable training curve plots (useful for servers/headless environments)')
     
     args = parser.parse_args()
     
@@ -518,7 +528,8 @@ if __name__ == '__main__':
     
     train_metrics, val_metrics = trainer.train(
         num_epochs=args.epochs,
-        start_epoch=start_epoch
+        start_epoch=start_epoch,
+        show_plot=not args.no_plot
     )
     
     # =========================================================================
