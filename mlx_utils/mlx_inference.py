@@ -1,6 +1,12 @@
-import torch
+import mlx.core as mx
 import numpy as np
-from rdkit import Chem
+
+# Optional RDKit import
+try:
+    from rdkit import Chem
+    RDKIT_AVAILABLE = True
+except ImportError:
+    RDKIT_AVAILABLE = False
 
 
 # =============================================================================
@@ -9,7 +15,7 @@ from rdkit import Chem
 
 def logits_to_molecule(sampled_graphs, graph_idx=0, validity_check=True):
     """
-    Convert sampled graph logits to RDKit molecule and SMILES
+    Convert sampled graph logits to RDKit molecule and SMILES (MLX version)
     
     Args:
         sampled_graphs: Output from decoder.sample_graph()
@@ -19,13 +25,15 @@ def logits_to_molecule(sampled_graphs, graph_idx=0, validity_check=True):
     Returns:
         dict: {'smiles': str, 'mol': rdkit.Mol, 'valid': bool}
     """
+    if not RDKIT_AVAILABLE:
+        raise ImportError("RDKit is required for molecule generation. Install with: pip install rdkit")
     
     # =========================================================================
     # Extract Graph Data
     # =========================================================================
     
     # Extract data for specific graph
-    graph_size = sampled_graphs['graph_sizes'][graph_idx].item()
+    graph_size = int(sampled_graphs['graph_sizes'][graph_idx].item())
     node_probs = sampled_graphs['node_probs'][graph_idx]  # [max_nodes, node_dim]
     edge_exist_probs = sampled_graphs['edge_exist_probs'][graph_idx]  # [num_edges]
     edge_type_probs = sampled_graphs['edge_type_probs'][graph_idx]  # [num_edges, edge_dim]
@@ -38,12 +46,12 @@ def logits_to_molecule(sampled_graphs, graph_idx=0, validity_check=True):
     atoms = []
     
     # Atom type mapping (matches your dataset's node features)
-    atom_types = [1, 6, 7, 8, 9, 15, 16, 17, 35, 53]  # H, C, N, O, F, P, S, Cl, Br, I
+    atom_types = [1, 6, 7, 8, 9]  # H, C, N, O, F
     
-    for i in range(min(graph_size, node_probs.size(0))):
-        # Get atom type probabilities (first 10 dimensions of node features)
+    for i in range(min(graph_size, node_probs.shape[0])):
+        # Get atom type probabilities (first 5 dimensions for atom types)
         atom_type_probs = node_probs[i, :len(atom_types)]
-        atom_type_idx = torch.argmax(atom_type_probs).item()
+        atom_type_idx = int(mx.argmax(atom_type_probs).item())
         atomic_num = atom_types[atom_type_idx]
         atoms.append(atomic_num)
     
@@ -76,18 +84,19 @@ def logits_to_molecule(sampled_graphs, graph_idx=0, validity_check=True):
     
     edge_threshold = 0.5  # Threshold for bond existence
     
-    for edge_idx, (i, j) in enumerate(edge_indices):
-        i, j = i.item(), j.item()
+    for edge_idx in range(edge_indices.shape[0]):
+        i = int(edge_indices[edge_idx, 0].item())
+        j = int(edge_indices[edge_idx, 1].item())
         
         # Only consider edges within the actual graph size
         if i >= graph_size or j >= graph_size:
             continue
             
         # Check if edge should exist
-        if edge_exist_probs[edge_idx].item() > edge_threshold:
+        if float(edge_exist_probs[edge_idx].item()) > edge_threshold:
             # Determine bond type
             bond_type_probs = edge_type_probs[edge_idx]
-            bond_type_idx = torch.argmax(bond_type_probs).item()
+            bond_type_idx = int(mx.argmax(bond_type_probs).item())
             
             # Map to RDKit bond type
             if bond_type_idx in bond_type_mapping:
@@ -142,7 +151,7 @@ def logits_to_molecule(sampled_graphs, graph_idx=0, validity_check=True):
 
 def batch_logits_to_molecules(sampled_graphs, validity_check=True):
     """
-    Convert a batch of sampled graphs to molecules
+    Convert a batch of sampled graphs to molecules (MLX version)
     
     Args:
         sampled_graphs: Output from decoder.sample_graph()
@@ -151,7 +160,7 @@ def batch_logits_to_molecules(sampled_graphs, validity_check=True):
     Returns:
         list: List of molecule dictionaries
     """
-    batch_size = len(sampled_graphs['graph_sizes'])
+    batch_size = sampled_graphs['graph_sizes'].shape[0]
     molecules = []
     
     for i in range(batch_size):
@@ -159,55 +168,3 @@ def batch_logits_to_molecules(sampled_graphs, validity_check=True):
         molecules.append(mol_dict)
     
     return molecules
-
-
-# =============================================================================
-# Generation Quality Evaluation
-# =============================================================================
-
-def evaluate_generation_quality(
-    molecules
-):
-    """
-    Comprehensive evaluation of generated molecules
-    
-    Args:
-        model: Trained MGCVAE model
-        target_properties: Target [BBBP, toxicity] values
-        num_samples: Number of molecules to generate
-        device: Device to run on
-        
-    Returns:
-        dict: Evaluation metrics
-    """
-
-    # =========================================================================
-    # Calculate Metrics
-    # =========================================================================
-    
-    valid_molecules = [m for m in molecules if m['valid']]
-    valid_smiles = [m['smiles'] for m in valid_molecules]
-    
-    validity = len(valid_molecules) / len(molecules) * 100
-    uniqueness = len(set(valid_smiles)) / len(valid_smiles) * 100 if valid_smiles else 0
-    
-    # Molecule size statistics
-    sizes = [m['num_atoms'] for m in valid_molecules]
-    avg_size = np.mean(sizes) if sizes else 0
-    
-    results = {
-        'validity': validity,
-        'uniqueness': uniqueness,
-        'num_generated': len(molecules),
-        'num_valid': len(valid_molecules),
-        'valid_smiles': valid_smiles,
-        'avg_molecule_size': avg_size,
-    }
-    
-    print(f"Generation Results:")
-    print(f"Validity: {validity:.1f}%")
-    print(f"Uniqueness: {uniqueness:.1f}%") 
-    print(f"Avg molecule size: {avg_size:.1f} atoms")
-    print(f"Valid SMILES examples: {valid_smiles[:5]}")
-    
-    return results

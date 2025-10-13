@@ -93,9 +93,20 @@ class MLXMGCVAETrainer:
         """
         print(f"\nLoading checkpoint from {checkpoint_path}...")
         
-        # Load model weights
-        checkpoint = mx.load(checkpoint_path)
-        self.model.update(checkpoint)
+        if not os.path.exists(checkpoint_path):
+            print(f"  ✗ Checkpoint not found: {checkpoint_path}")
+            print("  Starting with fresh model weights")
+            return 0
+        
+        # Load checkpoint using MLX's built-in load_weights
+        try:
+            self.model.load_weights(checkpoint_path)
+            print(f"  ✓ Model weights loaded successfully")
+        
+        except Exception as e:
+            print(f"  ✗ Failed to load checkpoint: {e}")
+            print("  Starting with fresh model weights")
+            return 0
         
         # Load metadata
         metadata_path = checkpoint_path.replace('.npz', '_metadata.json')
@@ -203,12 +214,10 @@ class MLXMGCVAETrainer:
         return epoch_losses
     
     def save_checkpoint(self, epoch, is_best=False):
-        """Save model checkpoint"""
-        flat_params = tree_flatten(self.model.parameters())
-        
-        # Save model parameters
+        """Save model checkpoint using MLX's built-in save_weights"""
+        # Save model parameters using MLX's proper method
         checkpoint_path = os.path.join(self.save_dir, f'checkpoint_epoch_{epoch}.npz')
-        mx.savez(checkpoint_path, **dict(flat_params))
+        self.model.save_weights(checkpoint_path)
         
         # Save metadata
         metadata = {
@@ -235,7 +244,7 @@ class MLXMGCVAETrainer:
         # Save best model
         if is_best:
             best_path = os.path.join(self.save_dir, 'best_model.npz')
-            mx.savez(best_path, **dict(flat_params))
+            self.model.save_weights(best_path)
             
             best_metadata_path = best_path.replace('.npz', '_metadata.json')
             with open(best_metadata_path, 'w') as f:

@@ -197,5 +197,3 @@ def evaluate_conditioning_latent(model, target, num_samples=100, tolerance=0.1):
         'std_pred': std_pred,
     }
 
-# Usage example:
-# results = evaluate_conditioning_latent(model, target=[0.8], num_samples=200, tolerance=0.1)
