@@ -1,9 +1,9 @@
 import mlx.core as mx
 import mlx.nn as nn
 
-from mlx_encoder import MLXGraphEncoder  # type: ignore
-from mlx_pp import MLXPropertyPredictor  # type: ignore
-from mlx_decoder import MLXGraphDecoder  # type: ignore
+from .mlx_encoder import MLXGraphEncoder  # type: ignore
+from .mlx_pp import MLXPropertyPredictor  # type: ignore
+from .mlx_decoder import MLXGraphDecoder  # type: ignore
 
 
 class MLXMGCVAE(nn.Module):
