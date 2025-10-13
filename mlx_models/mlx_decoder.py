@@ -86,14 +86,14 @@ class MLXGraphDecoder(nn.Module):
         h_pos = mx.add(mx.expand_dims(h_global, 1), mx.expand_dims(pos_embed, 0))
 
         # Vectorized edge prediction - compute all edges at once!
-        # Use precomputed edge indices
-        edge_i = self.edge_indices[:, 0]  # [num_edges]
-        edge_j = self.edge_indices[:, 1]  # [num_edges]
+        # Use precomputed edge indices (ensure int32 dtype for gather ops)
+        edge_i = mx.array(self.edge_indices[:, 0], dtype=mx.int32)  # [num_edges]
+        edge_j = mx.array(self.edge_indices[:, 1], dtype=mx.int32)  # [num_edges]
         
-        # Broadcast to batch dimension: [batch_size, num_edges, node_dim]
-        node_i_feat = node_logits[:, edge_i, :]  # [batch_size, num_edges, node_dim]
-        node_j_feat = node_logits[:, edge_j, :]  # [batch_size, num_edges, node_dim]
-        h_edge = (h_pos[:, edge_i, :] + h_pos[:, edge_j, :]) / 2  # [batch_size, num_edges, hidden_dim]
+        # Gather node features using take operation for all edges at once
+        node_i_feat = mx.take(node_logits, edge_i, axis=1)  # [batch_size, num_edges, node_dim]
+        node_j_feat = mx.take(node_logits, edge_j, axis=1)  # [batch_size, num_edges, node_dim]
+        h_edge = (mx.take(h_pos, edge_i, axis=1) + mx.take(h_pos, edge_j, axis=1)) / 2  # [batch_size, num_edges, hidden_dim]
         
         # Concatenate all edge inputs: [batch_size, num_edges, hidden_dim + 2*node_dim]
         edge_input = mx.concatenate([h_edge, node_i_feat, node_j_feat], axis=-1)

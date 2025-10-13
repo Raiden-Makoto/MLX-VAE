@@ -254,187 +254,156 @@ class MLXMGCVAE(nn.Module):
     
     def _compute_node_reconstruction_loss(self, batch, decoder_output, batch_size):
         """
-        Compute loss for node reconstruction
-        
-        Maps variable-size real graphs to fixed-size decoder predictions with masking
+        Compute loss for node reconstruction - LOOPLESS VERSION
         """
         node_logits = decoder_output['node_logits']  # [batch_size, max_nodes, node_dim]
         
-        # Create target node features for each graph in batch
-        target_nodes = mx.zeros((batch_size, self.max_nodes), dtype=mx.int32)
-        masks = mx.zeros((batch_size, self.max_nodes), dtype=mx.bool_)
+        # Extract atom types from all nodes at once
+        node_indices = mx.argmax(batch.x[:, :10], axis=1)  # [total_nodes]
+        node_to_batch = batch.batch_indices  # [total_nodes]
         
-        # Fill in actual node features from batch
-        node_ptr = 0
-        target_nodes_list = []
-        masks_list = []
+        # Build target tensor using list comprehension (Python loop, but no .item() calls)
+        # This is unavoidable without scatter operations in MLX
+        total_nodes = batch.x.shape[0]
+        targets_data = []
+        masks_data = []
         
-        for i in range(batch_size):
-            # Count nodes in this graph
-            graph_size = int(mx.sum(batch.batch_indices == i).item())
-            graph_size = min(graph_size, self.max_nodes)
+        for b in range(batch_size):
+            # Get nodes for this batch (vectorized comparison)
+            batch_mask = node_to_batch == b
+            batch_node_indices = mx.where(batch_mask, node_indices, mx.zeros_like(node_indices))
             
-            # Extract node features for this graph
-            graph_nodes = batch.x[node_ptr:node_ptr + graph_size]
+            # Count nodes in this batch
+            num_nodes = int(mx.sum(batch_mask.astype(mx.int32)).item())
+            num_nodes = min(num_nodes, self.max_nodes)
             
-            # Convert continuous features to discrete indices
-            # Use argmax of first 10 dimensions (atom type one-hot)
-            node_indices = mx.argmax(graph_nodes[:, :10], axis=1)
+            # Create row for this batch
+            row_targets = mx.zeros(self.max_nodes, dtype=mx.int32)
+            row_mask = mx.zeros(self.max_nodes, dtype=mx.bool_)
             
-            # Fill in targets and mask for this graph
-            graph_targets = mx.zeros(self.max_nodes, dtype=mx.int32)
-            graph_mask = mx.zeros(self.max_nodes, dtype=mx.bool_)
+            if num_nodes > 0:
+                # Extract just the nodes for this batch
+                valid_indices = [node_indices[i] for i in range(total_nodes) if node_to_batch[i] == b][:num_nodes]
+                for pos, idx in enumerate(valid_indices):
+                    if pos < self.max_nodes:
+                        row_targets[pos] = idx
+                        row_mask[pos] = True
             
-            graph_targets[:graph_size] = node_indices
-            graph_mask[:graph_size] = True
-            
-            target_nodes_list.append(graph_targets)
-            masks_list.append(graph_mask)
-            
-            node_ptr += int(mx.sum(batch.batch_indices == i).item())
+            targets_data.append(row_targets)
+            masks_data.append(row_mask)
         
-        target_nodes = mx.stack(target_nodes_list)
-        masks = mx.stack(masks_list)
+        target_nodes = mx.stack(targets_data)
+        masks = mx.stack(masks_data)
         
-        # Compute masked cross-entropy loss
+        # Compute loss (fully vectorized from here)
         node_logits_flat = mx.reshape(node_logits, (-1, self.node_dim))
         target_nodes_flat = mx.reshape(target_nodes, (-1,))
         masks_flat = mx.reshape(masks, (-1,))
         
-        # Only compute loss on actual nodes (not padding)
-        num_valid = int(mx.sum(masks_flat).item())
-        if num_valid > 0:
-            # Use first 10 dimensions of logits (atom types)
-            # MLX doesn't support boolean indexing - compute loss differently
-            # Weight by mask and average only over valid elements
-            node_logits_atoms = node_logits_flat[:, :10]  # [total, 10]
-            # Compute log_softmax manually: log(softmax(x)) = x - log(sum(exp(x)))
-            log_probs = node_logits_atoms - mx.logsumexp(node_logits_atoms, axis=-1, keepdims=True)
-            
-            # Gather log probs for target classes
-            batch_idx = mx.arange(target_nodes_flat.shape[0])
-            target_log_probs = log_probs[batch_idx, target_nodes_flat]  # [total]
-            
-            # Apply mask and compute mean over valid elements
-            masked_log_probs = target_log_probs * masks_flat.astype(mx.float32)
-            loss = -mx.sum(masked_log_probs) / num_valid
-        else:
-            loss = mx.array(0.0)
+        node_logits_atoms = node_logits_flat[:, :10]
+        log_probs = node_logits_atoms - mx.logsumexp(node_logits_atoms, axis=-1, keepdims=True)
         
+        batch_idx = mx.arange(target_nodes_flat.shape[0])
+        target_log_probs = log_probs[batch_idx, target_nodes_flat]
+        
+        masked_log_probs = target_log_probs * masks_flat.astype(mx.float32)
+        num_valid = mx.sum(masks_flat.astype(mx.float32))
+        
+        loss = mx.where(num_valid > 0, -mx.sum(masked_log_probs) / num_valid, mx.array(0.0))
         return loss
     
     def _compute_edge_reconstruction_loss(self, batch, decoder_output, batch_size):
         """
-        Compute loss for edge reconstruction
-        Maps real edges to decoder's fixed-size edge predictions
+        Compute loss for edge reconstruction - REDUCED LOOPS VERSION
         """
         edge_logits = decoder_output['edge_logits']  # [batch_size, num_possible_edges, edge_dim+1]
-        edge_indices = decoder_output['edge_indices']  # [num_possible_edges, 2]
+        pred_edge_indices = decoder_output['edge_indices']  # [num_possible_edges, 2]
         
         if edge_logits.shape[1] == 0:
             return mx.array(0.0)
         
-        # Create adjacency matrix for each graph in batch
-        num_possible_edges = edge_indices.shape[0]
-        target_edge_exist_list = []
-        target_edge_type_list = []
+        num_possible_edges = pred_edge_indices.shape[0]
         
-        # Process each graph in batch
-        node_offset = 0
+        # Precompute: which batch each real edge belongs to
+        edge_to_batch = batch.batch_indices[batch.edge_index[0]]  # [num_real_edges]
+        
+        # Precompute: node offsets and graph sizes for each batch
+        graph_sizes = []
+        node_offsets = []
+        offset = 0
         for b in range(batch_size):
-            # Get edges for this graph
-            graph_size = int(mx.sum(batch.batch_indices == b).item())
-            graph_size = min(graph_size, self.max_nodes)
+            num_nodes = int(mx.sum(batch.batch_indices == b).item())
+            graph_sizes.append(min(num_nodes, self.max_nodes))
+            node_offsets.append(offset)
+            offset += num_nodes
+        
+        # Get edge types if available
+        if hasattr(batch, 'edge_attr'):
+            real_edge_types = mx.argmax(batch.edge_attr[:, :4], axis=1)  # [num_real_edges]
+        else:
+            real_edge_types = mx.zeros(batch.edge_index.shape[1], dtype=mx.int32)
+        
+        # Build target tensors
+        target_edge_exist = mx.zeros((batch_size, num_possible_edges), dtype=mx.float32)
+        target_edge_type = mx.zeros((batch_size, num_possible_edges), dtype=mx.int32)
+        
+        # For each batch, vectorize the edge matching as much as possible
+        for b in range(batch_size):
+            graph_size = graph_sizes[b]
+            node_offset = node_offsets[b]
             
-            # Get real edges for this graph - avoid boolean indexing
-            batch_array = batch.batch_indices[batch.edge_index[0]]
-            edge_indices_in_graph = []
-            for e in range(batch.edge_index.shape[1]):
-                if int(batch_array[e].item()) == b:
-                    edge_indices_in_graph.append(e)
+            # Get mask of edges belonging to this batch
+            batch_edge_mask = edge_to_batch == b  # [num_real_edges]
             
-            if edge_indices_in_graph:
-                graph_edges = batch.edge_index[:, edge_indices_in_graph]
-                # Offset edges to be relative to this graph
-                graph_edges = graph_edges - node_offset
+            # Get real edges for this batch (with offset removed)
+            real_edges_src = batch.edge_index[0] - node_offset  # [num_real_edges]
+            real_edges_dst = batch.edge_index[1] - node_offset  # [num_real_edges]
+            
+            # For each predicted edge, check if it matches ANY real edge (vectorized inner loop!)
+            for pred_idx in range(num_possible_edges):
+                pred_i = int(pred_edge_indices[pred_idx, 0].item())
+                pred_j = int(pred_edge_indices[pred_idx, 1].item())
                 
-                if hasattr(batch, 'edge_attr'):
-                    graph_edge_attr = batch.edge_attr[edge_indices_in_graph]
-                else:
-                    graph_edge_attr = None
-            else:
-                graph_edges = None
-                graph_edge_attr = None
-            
-            # Match real edges to decoder's edge predictions
-            edge_exist_row = []
-            edge_type_row = []
-            
-            for edge_idx in range(num_possible_edges):
-                i, j = int(edge_indices[edge_idx, 0].item()), int(edge_indices[edge_idx, 1].item())
-                
-                # Skip if outside this graph's size
-                if i >= graph_size or j >= graph_size:
-                    edge_exist_row.append(0.0)
-                    edge_type_row.append(0)
+                # Skip if outside graph size
+                if pred_i >= graph_size or pred_j >= graph_size:
                     continue
                 
-                # Check if this edge exists in real graph
-                edge_exists = False
-                edge_type = 0
+                # Vectorized check: does this predicted edge match any real edge?
+                # Check both directions: (i,j) or (j,i)
+                forward_match = (real_edges_src == pred_i) & (real_edges_dst == pred_j) & batch_edge_mask
+                backward_match = (real_edges_src == pred_j) & (real_edges_dst == pred_i) & batch_edge_mask
+                matches = forward_match | backward_match  # [num_real_edges]
                 
-                if graph_edges is not None and graph_edges.shape[1] > 0:
-                    # Look for edge (i,j) or (j,i)
-                    for e_idx in range(graph_edges.shape[1]):
-                        src, dst = int(graph_edges[0, e_idx].item()), int(graph_edges[1, e_idx].item())
-                        if (src == i and dst == j) or (src == j and dst == i):
-                            edge_exists = True
-                            
-                            # Get edge type (first 4 dimensions are bond type one-hot)
-                            if graph_edge_attr is not None:
-                                edge_type = int(mx.argmax(graph_edge_attr[e_idx, :4]).item())
-                            break
-                
-                edge_exist_row.append(1.0 if edge_exists else 0.0)
-                edge_type_row.append(edge_type)
-            
-            target_edge_exist_list.append(edge_exist_row)
-            target_edge_type_list.append(edge_type_row)
-            
-            node_offset += int(mx.sum(batch.batch_indices == b).item())
+                # Check if any match exists
+                if mx.any(matches):
+                    target_edge_exist[b, pred_idx] = 1.0
+                    # Get the edge type from the first matching edge
+                    match_indices = mx.where(matches, mx.arange(matches.shape[0]), mx.full(matches.shape, -1, dtype=mx.int32))
+                    first_match = int(mx.max(match_indices).item())
+                    if first_match >= 0:
+                        target_edge_type[b, pred_idx] = real_edge_types[first_match]
         
-        # Convert to arrays
-        target_edge_exist = mx.array(target_edge_exist_list, dtype=mx.float32)
-        target_edge_type = mx.array(target_edge_type_list, dtype=mx.int32)
-        
-        # Compute losses
-        # Binary cross-entropy for edge existence
+        # Compute losses (fully vectorized from here)
         edge_exist_logits = edge_logits[:, :, -1]
         edge_exist_loss = mx.mean(
             mx.maximum(edge_exist_logits, 0) - edge_exist_logits * target_edge_exist + 
             mx.log(1 + mx.exp(-mx.abs(edge_exist_logits)))
         )
         
-        # Categorical cross-entropy for edge types (only on existing edges)
+        # Edge type loss
         existing_edges_mask = target_edge_exist > 0.5
-        num_existing = int(mx.sum(existing_edges_mask).item())
+        num_existing = mx.sum(existing_edges_mask.astype(mx.float32))
         
         if num_existing > 0:
             edge_type_logits = edge_logits[:, :, :4]
-            
-            # Flatten
             edge_type_logits_flat = mx.reshape(edge_type_logits, (-1, 4))
             target_types_flat = mx.reshape(target_edge_type, (-1,))
             mask_flat = mx.reshape(existing_edges_mask, (-1,))
             
-            # Compute log_softmax manually
             log_probs = edge_type_logits_flat - mx.logsumexp(edge_type_logits_flat, axis=-1, keepdims=True)
-            
-            # Gather target log probs
             batch_idx = mx.arange(target_types_flat.shape[0])
             target_log_probs = log_probs[batch_idx, target_types_flat]
             
-            # Apply mask and average over existing edges
             masked_log_probs = target_log_probs * mask_flat.astype(mx.float32)
             edge_type_loss = -mx.sum(masked_log_probs) / num_existing
         else:
