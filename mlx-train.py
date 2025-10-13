@@ -13,6 +13,8 @@ from mlx_data.mlx_dataset import QM9GraphDataset  # type: ignore
 from mlx_models.mlx_vae import MLXMGCVAE  # type: ignore
 from mlx_graphs.loaders import Dataloader  # type: ignore
 from sklearn.model_selection import train_test_split  # type: ignore
+import json
+import argparse
 
 
 class MLXMGCVAETrainer:
@@ -72,6 +74,44 @@ class MLXMGCVAETrainer:
         self.patience_counter = 0
         self.max_patience = 30
         self.best_model_weights = None
+    
+    def load_checkpoint(self, checkpoint_path):
+        """
+        Load model and training state from checkpoint
+        
+        Args:
+            checkpoint_path: Path to checkpoint .npz file
+        
+        Returns:
+            epoch: The epoch number to resume from
+        """
+        print(f"\nLoading checkpoint from {checkpoint_path}...")
+        
+        # Load model weights
+        checkpoint = mx.load(checkpoint_path)
+        self.model.update(checkpoint)
+        
+        # Load metadata
+        metadata_path = checkpoint_path.replace('.npz', '_metadata.json')
+        if os.path.exists(metadata_path):
+            with open(metadata_path, 'r') as f:
+                metadata = json.load(f)
+            
+            # Restore training state
+            self.train_metrics = {k: list(v) for k, v in metadata.get('train_metrics', {}).items()}
+            self.val_metrics = {k: list(v) for k, v in metadata.get('val_metrics', {}).items()}
+            self.best_val_loss = metadata.get('best_val_loss', float('inf'))
+            
+            epoch = metadata.get('epoch', 0)
+            
+            print(f"  ✓ Loaded checkpoint from epoch {epoch}")
+            print(f"  ✓ Best validation loss: {self.best_val_loss:.4f}")
+            print(f"  ✓ Training history restored")
+            
+            return epoch
+        else:
+            print("  ⚠ Metadata not found, only model weights loaded")
+            return 0
     
     def train_epoch(self):
         """Train for one epoch"""
@@ -182,7 +222,6 @@ class MLXMGCVAETrainer:
             'timestamp': datetime.now().isoformat()
         }
         
-        import json
         metadata_path = checkpoint_path.replace('.npz', '_metadata.json')
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
@@ -338,9 +377,28 @@ class MLXMGCVAETrainer:
 # =============================================================================
 
 if __name__ == '__main__':
+    # =========================================================================
+    # Parse Arguments
+    # =========================================================================
+    
+    parser = argparse.ArgumentParser(description='Train MLXMGCVAE model')
+    parser.add_argument('--resume', type=str, nargs='?', const='checkpoints/mlx_mgcvae/best_model.npz', default=None,
+                        help='Resume from checkpoint. Optionally specify path, defaults to best_model.npz')
+    parser.add_argument('--epochs', type=int, default=10,
+                        help='Number of epochs to train')
+    parser.add_argument('--batch-size', type=int, default=32,
+                        help='Batch size for training')
+    parser.add_argument('--lr', type=float, default=1e-3,
+                        help='Learning rate')
+    
+    args = parser.parse_args()
+    
     print("="*70)
     print("MLXMGCVAE Training Script")
     print("="*70)
+    
+    if args.resume:
+        print(f"\n⚡ Resume mode: Will load from {args.resume}")
     
     # =========================================================================
     # Load Dataset
@@ -374,7 +432,7 @@ if __name__ == '__main__':
     # =========================================================================
     
     print("\n[2] Creating data loaders...")
-    batch_size = 32
+    batch_size = args.batch_size
     
     train_loader = Dataloader(train_graphs, batch_size=batch_size, shuffle=True)
     val_loader = Dataloader(val_graphs, batch_size=batch_size, shuffle=False)
@@ -426,7 +484,7 @@ if __name__ == '__main__':
         train_loader=train_loader,
         val_loader=val_loader,
         test_loader=test_loader,
-        lr=1e-3,
+        lr=args.lr,
         save_dir='checkpoints/mlx_mgcvae'
     )
     
@@ -435,16 +493,26 @@ if __name__ == '__main__':
     print(f"  Save directory: {trainer.save_dir}")
     
     # =========================================================================
+    # Resume from Checkpoint (if specified)
+    # =========================================================================
+    
+    start_epoch = 1
+    if args.resume:
+        print("\n[4.5] Loading checkpoint...")
+        loaded_epoch = trainer.load_checkpoint(args.resume)
+        start_epoch = loaded_epoch + 1
+        print(f"  Resuming from epoch {start_epoch}")
+    
+    # =========================================================================
     # Train Model
     # =========================================================================
     
     print("\n[5] Starting training...")
     print("="*70)
     
-    num_epochs = 10
     train_metrics, val_metrics = trainer.train(
-        num_epochs=num_epochs,
-        start_epoch=1
+        num_epochs=args.epochs,
+        start_epoch=start_epoch
     )
     
     # =========================================================================
