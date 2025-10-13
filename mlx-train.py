@@ -355,7 +355,7 @@ if __name__ == '__main__':
     
     print("\n[1] Loading dataset...")
     dataset = QM9GraphDataset(
-        csv_path="data/qm9_bbbp2.csv",
+        csv_path="mlx_data/qm9_mlx.csv",
         smiles_col="smiles",
         label_col="p_np"
     )
@@ -388,9 +388,9 @@ if __name__ == '__main__':
     test_loader = Dataloader(test_graphs, batch_size=batch_size, shuffle=False)
     
     print(f"  Batch size: {batch_size}")
-    print(f"  Train batches: {len(train_loader)}")
-    print(f"  Val batches: {len(val_loader)}")
-    print(f"  Test batches: {len(test_loader)}")
+    print(f"  Train batches: ~{len(train_graphs) // batch_size + (1 if len(train_graphs) % batch_size else 0)}")
+    print(f"  Val batches: ~{len(val_graphs) // batch_size + (1 if len(val_graphs) % batch_size else 0)}")
+    print(f"  Test batches: ~{len(test_graphs) // batch_size + (1 if len(test_graphs) % batch_size else 0)}")
     
     # =========================================================================
     # Initialize Model

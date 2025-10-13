@@ -93,16 +93,12 @@ class QM9GraphDataset:
 
         # Label
         y = mx.array([label], dtype=mx.float32)
-        # Single-graph batch index
-        batch = mx.zeros(x.shape[0], dtype=mx.int64)
 
         return GraphData(
             x=x,
             edge_index=edge_index,
             edge_attr=edge_attr,
-            y=y,
-            batch=batch,
-            smiles=smiles
+            y=y
         )
 
     def __len__(self):

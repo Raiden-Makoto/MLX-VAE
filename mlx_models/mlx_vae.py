@@ -141,7 +141,7 @@ class MLXMGCVAE(nn.Module):
         x = batch.x
         edge_index = batch.edge_index
         edge_attr = batch.edge_attr if hasattr(batch, 'edge_attr') else None
-        batch_idx = batch.batch
+        batch_idx = batch.batch_indices
         true_properties = batch.y
         
         # Ensure true_properties has shape [batch_size, num_properties]
@@ -271,7 +271,7 @@ class MLXMGCVAE(nn.Module):
         
         for i in range(batch_size):
             # Count nodes in this graph
-            graph_size = int(mx.sum(batch.batch == i).item())
+            graph_size = int(mx.sum(batch.batch_indices == i).item())
             graph_size = min(graph_size, self.max_nodes)
             
             # Extract node features for this graph
@@ -291,7 +291,7 @@ class MLXMGCVAE(nn.Module):
             target_nodes_list.append(graph_targets)
             masks_list.append(graph_mask)
             
-            node_ptr += int(mx.sum(batch.batch == i).item())
+            node_ptr += int(mx.sum(batch.batch_indices == i).item())
         
         target_nodes = mx.stack(target_nodes_list)
         masks = mx.stack(masks_list)
@@ -343,11 +343,11 @@ class MLXMGCVAE(nn.Module):
         node_offset = 0
         for b in range(batch_size):
             # Get edges for this graph
-            graph_size = int(mx.sum(batch.batch == b).item())
+            graph_size = int(mx.sum(batch.batch_indices == b).item())
             graph_size = min(graph_size, self.max_nodes)
             
             # Get real edges for this graph - avoid boolean indexing
-            batch_array = batch.batch[batch.edge_index[0]]
+            batch_array = batch.batch_indices[batch.edge_index[0]]
             edge_indices_in_graph = []
             for e in range(batch.edge_index.shape[1]):
                 if int(batch_array[e].item()) == b:
@@ -401,7 +401,7 @@ class MLXMGCVAE(nn.Module):
             target_edge_exist_list.append(edge_exist_row)
             target_edge_type_list.append(edge_type_row)
             
-            node_offset += int(mx.sum(batch.batch == b).item())
+            node_offset += int(mx.sum(batch.batch_indices == b).item())
         
         # Convert to arrays
         target_edge_exist = mx.array(target_edge_exist_list, dtype=mx.float32)
