@@ -12,6 +12,12 @@ from tqdm import tqdm
 from mlx_data.mlx_dataset import QM9GraphDataset  # type: ignore
 from mlx_models.mlx_vae import MLXMGCVAE  # type: ignore
 from mlx_graphs.loaders import Dataloader  # type: ignore
+from mlx_utils.mlx_metrics import (
+    evaluate_property_prediction,
+    evaluate_reconstruction_and_kl,
+    evaluate_conditioning_latent,
+)
+
 from sklearn.model_selection import train_test_split  # type: ignore
 import json
 import argparse
@@ -563,4 +569,13 @@ if __name__ == '__main__':
     
     print("\n" + "="*70)
     print("Training completed successfully!")
+    print("="*70)
+    print("Evaluating Several Metrics (this may take a while)...")
+    print("="*70)
+    _ = evaluate_property_prediction(model, test_loader)
+    _ = evaluate_reconstruction_and_kl(model, test_loader)
+    print()
+    _ = evaluate_conditioning_latent(model, target=[0.9], num_samples=100, tolerance=0.1)
+    print("="*70)
+    print("Evaluation completed successfully!")
     print("="*70)
