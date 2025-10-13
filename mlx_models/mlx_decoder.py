@@ -15,7 +15,7 @@ class MLXGraphDecoder(nn.Module):
         node_dim,
         edge_dim,
         hidden_dim,
-        max_nodes=50,
+        max_nodes=20,
         dropout=0.1
     ):
         super().__init__()
@@ -51,6 +51,14 @@ class MLXGraphDecoder(nn.Module):
             nn.Linear(hidden_dim, edge_dim + 1)
         )
         self.pos_embedding = nn.Embedding(max_nodes, hidden_dim)
+        
+        # Precompute edge indices once (all pairs i < j)
+        edge_indices = []
+        for i in range(max_nodes):
+            for j in range(i + 1, max_nodes):
+                edge_indices.append([i, j])
+        self.edge_indices = mx.array(edge_indices, dtype=mx.int32)
+        self.num_edges = len(edge_indices)
 
     def __call__(self, z, target_properties):
         """
@@ -77,28 +85,32 @@ class MLXGraphDecoder(nn.Module):
         pos_embed = self.pos_embedding(positions)
         h_pos = mx.add(mx.expand_dims(h_global, 1), mx.expand_dims(pos_embed, 0))
 
-        edge_logits = []
-        edge_indices = []
-        for i in range(self.max_nodes):
-            for j in range(i + 1, self.max_nodes):
-                node_i_feat = node_logits[:, i, :]
-                node_j_feat = node_logits[:, j, :]
-                h_edge = (h_pos[:, i, :] + h_pos[:, j, :]) / 2
-                edge_input = mx.concatenate([h_edge, node_i_feat, node_j_feat], axis=-1)
-                edge_pred = self.edge_predictor(edge_input)
-                edge_logits.append(edge_pred)
-                edge_indices.append([i, j])
-        if edge_logits:
-            edge_logits = mx.stack(edge_logits, axis=1)
-            edge_indices = mx.array(edge_indices, dtype=mx.int32)
-        else:
-            edge_logits = mx.zeros([batch_size, 0, self.edge_dim + 1])
-            edge_indices = mx.array([], dtype=mx.int32).reshape(0, 2)
+        # Vectorized edge prediction - compute all edges at once!
+        # Use precomputed edge indices
+        edge_i = self.edge_indices[:, 0]  # [num_edges]
+        edge_j = self.edge_indices[:, 1]  # [num_edges]
+        
+        # Broadcast to batch dimension: [batch_size, num_edges, node_dim]
+        node_i_feat = node_logits[:, edge_i, :]  # [batch_size, num_edges, node_dim]
+        node_j_feat = node_logits[:, edge_j, :]  # [batch_size, num_edges, node_dim]
+        h_edge = (h_pos[:, edge_i, :] + h_pos[:, edge_j, :]) / 2  # [batch_size, num_edges, hidden_dim]
+        
+        # Concatenate all edge inputs: [batch_size, num_edges, hidden_dim + 2*node_dim]
+        edge_input = mx.concatenate([h_edge, node_i_feat, node_j_feat], axis=-1)
+        
+        # Reshape to process all edges together: [batch_size * num_edges, hidden_dim + 2*node_dim]
+        edge_input_flat = mx.reshape(edge_input, [-1, edge_input.shape[-1]])
+        
+        # Predict all edges at once
+        edge_pred_flat = self.edge_predictor(edge_input_flat)  # [batch_size * num_edges, edge_dim + 1]
+        
+        # Reshape back: [batch_size, num_edges, edge_dim + 1]
+        edge_logits = mx.reshape(edge_pred_flat, [batch_size, self.num_edges, self.edge_dim + 1])
         return {
             'node_logits': node_logits,
             'edge_logits': edge_logits,
             'size_probs': size_probs,
-            'edge_indices': edge_indices
+            'edge_indices': self.edge_indices
         }
     
     def sample_graph(self, decoder_output, temperature=1.0):

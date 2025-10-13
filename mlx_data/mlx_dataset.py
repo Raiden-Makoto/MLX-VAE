@@ -51,7 +51,7 @@ class QM9GraphDataset:
         node_feats = []
         for atom in mol.GetAtoms():
             feats = []
-            atomic_nums = [1,6,7,8,9,15,16,17,35,53]
+            atomic_nums = [1,6,7,8,9]  # H, C, N, O, F only
             feats += [1.0 if atom.GetAtomicNum()==n else 0.0 for n in atomic_nums]
             degrees = list(range(6))
             feats += [1.0 if atom.GetDegree()==d else 0.0 for d in degrees]

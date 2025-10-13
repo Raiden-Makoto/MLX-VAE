@@ -87,31 +87,24 @@ class MLXMGCVAETrainer:
         
         pbar = tqdm(self.train_loader, desc='Training')
         
-        # Define loss and gradient function
+        # Define loss and gradient function that returns all losses
         def compute_loss(batch):
             output = self.model(batch)
             losses = self.model.compute_loss(batch, output)
-            return losses['total_loss']
+            return losses['total_loss'], losses
         
         loss_and_grad_fn = nn.value_and_grad(self.model, compute_loss)
         
         for batch in pbar:
             # =====================================================================
-            # Forward and Backward Pass
+            # Forward and Backward Pass (single forward pass!)
             # =====================================================================
             
-            loss, grads = loss_and_grad_fn(batch)
+            (loss, loss_dict), grads = loss_and_grad_fn(batch)
             
             # Update model parameters
             self.optimizer.update(self.model, grads)
             mx.eval(self.model.parameters())
-            
-            # =====================================================================
-            # Compute Full Losses for Logging
-            # =====================================================================
-            
-            output = self.model(batch)
-            loss_dict = self.model.compute_loss(batch, output)
             
             # =====================================================================
             # Accumulate Losses
@@ -355,7 +348,7 @@ if __name__ == '__main__':
     
     print("\n[1] Loading dataset...")
     dataset = QM9GraphDataset(
-        csv_path="mlx_data/qm9_mlx.csv",
+        csv_path="mlx_data/qm9_mlx_part2.csv",
         smiles_col="smiles",
         label_col="p_np"
     )
@@ -399,7 +392,7 @@ if __name__ == '__main__':
     print("\n[3] Initializing model...")
     
     model_config = {
-        'node_dim': 29,      # QM9 atom features
+        'node_dim': 24,      # Atom features: 5 atom types (H,C,N,O,F) + 6 degree + 5 charge + 6 hybridization + 1 aromatic + 1 ring
         'edge_dim': 6,       # Bond features
         'latent_dim': 32,
         'hidden_dim': 64,

@@ -25,7 +25,7 @@ class MLXMGCVAE(nn.Module):
         num_properties=2,
         num_layers=4,
         heads=4,
-        max_nodes=50,
+        max_nodes=20,
         beta=1.0,
         gamma=1.0,
         dropout=0.1
