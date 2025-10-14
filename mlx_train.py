@@ -353,6 +353,10 @@ class MLXMGCVAETrainer:
         end_epoch = start_epoch + num_epochs - 1
         print(f"Starting MLXMGCVAE training from epoch {start_epoch} to {end_epoch}")
         
+        print("\n" + "="*70)
+        print("Training MLXMGCVAE")
+        print("="*70)
+        
         # Count parameters
         total_params = sum(x.size for k, x in tree_flatten(self.model.parameters()))
         print(f"Model parameters: {total_params:,}")
@@ -366,6 +370,7 @@ class MLXMGCVAETrainer:
             
             # Compute current capacity target based on schedule
             C_t = self.C_max * min(1.0, epoch / self.warmup_epochs)
+            print(f"  Capacity target: {C_t:.4f} nats")
             
             # Update model's capacity target
             self.model.current_capacity = C_t
@@ -391,7 +396,9 @@ class MLXMGCVAETrainer:
             if val_losses['total'] < self.best_val_loss:
                 self.best_val_loss = val_losses['total']
                 self.patience_counter = 0
-                self.best_model_weights = {k: v.copy() for k, v in self.model.parameters().items()}
+                # Deep copy of model parameters using tree_map
+                from mlx.utils import tree_map
+                self.best_model_weights = tree_map(lambda x: mx.array(x), self.model.parameters())
                 self.save_checkpoint(epoch, is_best=True)
             else:
                 self.patience_counter += 1
@@ -408,13 +415,9 @@ class MLXMGCVAETrainer:
             # Epoch Summary
             # =====================================================================
             
-            # Compute mean KL per graph for display
-            train_kl_mean = mx.mean(train_losses['kl_per_graph']).item()
-            val_kl_mean = mx.mean(val_losses['kl_per_graph']).item()
-            
-            print(f"Train Loss: {train_losses['total']:.4f} | Val Loss: {val_losses['total']:.4f}")
-            print(f"Recon: {train_losses['reconstruction']:.4f} | KL: {train_kl_mean:.4f} (target: {C_t:.4f}) | Prop: {train_losses['property']:.4f}")
-            print(f"Val KL: {val_kl_mean:.4f} | LR: {self.optimizer.learning_rate.item():.2e} | Patience: {self.patience_counter}/{self.max_patience}")
+            print(f"Train Loss: {train_losses['total_loss']:.4f} | Val Loss: {val_losses['total_loss']:.4f}")
+            print(f"Recon: {train_losses['reconstruction_loss']:.4f} | KL: {train_losses['kl_loss']:.4f} (target: {C_t:.4f}) | Prop: {train_losses['property_loss']:.4f}")
+            print(f"Val KL: {val_losses['kl_loss']:.4f} | LR: {self.optimizer.learning_rate.item():.2e} | Patience: {self.patience_counter}/{self.max_patience}")
             
             # =====================================================================
             # Early Stopping
@@ -461,18 +464,7 @@ if __name__ == '__main__':
     
     args = parser.parse_args()
     
-    print("="*70)
-    print("MLXMGCVAE Training Script")
-    print("="*70)
-    
-    if args.resume:
-        print(f"\n⚡ Resume mode: Will load from {args.resume}")
-    
-    # =========================================================================
     # Load Dataset
-    # =========================================================================
-    
-    print("\n[1] Loading dataset...")
     dataset = QM9GraphDataset(
         csv_path="mlx_data/qm9_mlx_part2.csv",
         smiles_col="smiles",
@@ -491,32 +483,13 @@ if __name__ == '__main__':
         random_state=67
     )
     
-    print(f"  Train dataset size: {len(train_graphs)}")
-    print(f"  Validation dataset size: {len(val_graphs)}")
-    print(f"  Test dataset size: {len(test_graphs)}")
-    
-    # =========================================================================
     # Create Data Loaders
-    # =========================================================================
-    
-    print("\n[2] Creating data loaders...")
     batch_size = args.batch_size
-    
     train_loader = Dataloader(train_graphs, batch_size=batch_size, shuffle=True)
     val_loader = Dataloader(val_graphs, batch_size=batch_size, shuffle=False)
     test_loader = Dataloader(test_graphs, batch_size=batch_size, shuffle=False)
     
-    print(f"  Batch size: {batch_size}")
-    print(f"  Train batches: ~{len(train_graphs) // batch_size + (1 if len(train_graphs) % batch_size else 0)}")
-    print(f"  Val batches: ~{len(val_graphs) // batch_size + (1 if len(val_graphs) % batch_size else 0)}")
-    print(f"  Test batches: ~{len(test_graphs) // batch_size + (1 if len(test_graphs) % batch_size else 0)}")
-    
-    # =========================================================================
     # Initialize Model
-    # =========================================================================
-    
-    print("\n[3] Initializing model...")
-    
     model_config = {
         'node_dim': 24,      # Atom features: 5 atom types (H,C,N,O,F) + 6 degree + 5 charge + 6 hybridization + 1 aromatic + 1 ring
         'edge_dim': 6,       # Bond features
@@ -533,20 +506,7 @@ if __name__ == '__main__':
     
     model = MLXMGCVAE(**model_config)
     
-    print("  Model configuration:")
-    for key, value in model_config.items():
-        print(f"    {key}: {value}")
-    
-    # Count parameters
-    total_params = sum(x.size for k, x in tree_flatten(model.parameters()))
-    print(f"  Total parameters: {total_params:,}")
-    
-    # =========================================================================
     # Initialize Trainer
-    # =========================================================================
-    
-    print("\n[4] Setting up trainer...")
-    
     trainer = MLXMGCVAETrainer(
         model=model,
         train_loader=train_loader,
@@ -556,27 +516,11 @@ if __name__ == '__main__':
         save_dir='checkpoints/mlx_mgcvae'
     )
     
-    print(f"  Learning rate: {trainer.initial_lr:.2e}")
-    print(f"  Early stopping patience: {trainer.max_patience}")
-    print(f"  Save directory: {trainer.save_dir}")
-    
-    # =========================================================================
     # Resume from Checkpoint (if specified)
-    # =========================================================================
-    
     start_epoch = 1
     if args.resume:
-        print("\n[4.5] Loading checkpoint...")
         loaded_epoch = trainer.load_checkpoint(args.resume)
         start_epoch = loaded_epoch + 1
-        print(f"  Resuming from epoch {start_epoch}")
-    
-    # =========================================================================
-    # Train Model
-    # =========================================================================
-    
-    print("\n[5] Starting training...")
-    print("="*70)
     
     train_metrics, val_metrics = trainer.train(
         num_epochs=args.epochs,
@@ -592,18 +536,15 @@ if __name__ == '__main__':
     print("Final Evaluation")
     print("="*70)
     
+    # Restore best model weights
     if trainer.best_model_weights is not None:
         print("\n✓ Restoring best model weights...")
         model.update(trainer.best_model_weights)
         print(f"  Best validation loss: {trainer.best_val_loss:.4f}")
     
-    # =========================================================================
     # Test Set Evaluation
-    # =========================================================================
-    
     print("\nEvaluating on test set...")
     model.eval()
-    
     test_losses = {
         'total': 0,
         'reconstruction': 0,
@@ -630,15 +571,11 @@ if __name__ == '__main__':
     print(f"  KL Divergence:      {test_losses['kl']:.4f}")
     print(f"  Property Loss:      {test_losses['property']:.4f}")
     
-    print("\n" + "="*70)
-    print("Training completed successfully!")
-    print("="*70)
-    print("Evaluating Several Metrics (this may take a while)...")
-    print("="*70)
+    print("\nEvaluating metrics...")
     _ = evaluate_property_prediction(model, test_loader)
     _ = evaluate_reconstruction_and_kl(model, test_loader)
-    print()
     _ = evaluate_conditioning_latent(model, target=[0.9], num_samples=100, tolerance=0.1)
-    print("="*70)
-    print("Evaluation completed successfully!")
+    
+    print("\n" + "="*70)
+    print("Training completed successfully!")
     print("="*70)
