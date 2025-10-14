@@ -29,23 +29,27 @@ class MLXGraphDecoder(nn.Module):
 
         self.input_proj = nn.Sequential(
             nn.Linear(latent_dim + num_properties, hidden_dim),
+            nn.BatchNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout)
         )
         self.size_predictor = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim // 2),
+            nn.BatchNorm(hidden_dim // 2),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim // 2, max_nodes)
         )
         self.node_generator = nn.Sequential(
             nn.Linear(hidden_dim, hidden_dim),
+            nn.BatchNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, max_nodes * node_dim)
         )
         self.edge_predictor = nn.Sequential(
             nn.Linear(hidden_dim + 2 * node_dim, hidden_dim),
+            nn.BatchNorm(hidden_dim),
             nn.ReLU(),
             nn.Dropout(dropout),
             nn.Linear(hidden_dim, edge_dim + 1)

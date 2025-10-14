@@ -80,16 +80,16 @@ class MLXMGCVAETrainer:
         self.patience_counter = 0
         self.max_patience = 30
         self.best_model_weights = None
-        self.min_kl_threshold = 0.3  # Stop if KL drops below this (posterior collapse)
+        # Early stopping configuration
+        self.best_val_loss = float('inf')
+        self.patience_counter = 0
+        self.max_patience = 30
+        self.best_model_weights = None
         
-        # KL annealing with capacity control (free bits)
-        self.initial_beta = self.model.beta
-        self.target_beta = 1.0  # Target beta value
-        self.initial_capacity = 5.0  # Start with high capacity (allow high KL)
-        self.target_capacity = 0.0  # End with zero capacity (full KL penalty)
-        self.anneal_every = 2  # Anneal every N epochs
-        self.beta_anneal_rate = 0.2  # Increase beta by this each time
-        self.capacity_anneal_rate = 0.5  # Decrease capacity by this each time
+        # Capacity control configuration
+        self.C_max = self.model.latent_dim * 0.8  # Target capacity (nats per latent dim)
+        self.warmup_epochs = 5                     # Epochs to reach full capacity
+        self.gamma = 1.0                          # KL penalty weight
     
     def load_checkpoint(self, checkpoint_path):
         """
@@ -361,21 +361,14 @@ class MLXMGCVAETrainer:
             print(f"\nEpoch {epoch}/{end_epoch}")
             
             # =====================================================================
-            # KL Annealing - Gradually increase beta and decrease capacity
+            # Update Capacity Target
             # =====================================================================
             
-            if epoch > 1 and (epoch - 1) % self.anneal_every == 0:
-                # Increase beta
-                old_beta = self.model.beta
-                new_beta = min(old_beta + self.beta_anneal_rate, self.target_beta)
-                self.model.beta = new_beta
-                
-                # Decrease capacity (allow less "free" KL)
-                old_capacity = self.model.kl_capacity
-                new_capacity = max(old_capacity - self.capacity_anneal_rate, self.target_capacity)
-                self.model.kl_capacity = new_capacity
-                
-                print(f"  📈 KL Annealing: beta {old_beta:.2f}→{new_beta:.2f}, capacity {old_capacity:.1f}→{new_capacity:.1f}")
+            # Compute current capacity target based on schedule
+            C_t = self.C_max * min(1.0, epoch / self.warmup_epochs)
+            
+            # Update model's capacity target
+            self.model.current_capacity = C_t
             
             # =====================================================================
             # Training and Validation
@@ -403,16 +396,6 @@ class MLXMGCVAETrainer:
             else:
                 self.patience_counter += 1
             
-            # =====================================================================
-            # Posterior Collapse Detection
-            # =====================================================================
-            
-            # Stop if KL divergence drops too low (posterior collapse)
-            if val_losses['kl'] < self.min_kl_threshold:
-                print(f"\n🚨 Posterior collapse detected! KL = {val_losses['kl']:.4f} < {self.min_kl_threshold}")
-                print(f"Stopping at epoch {epoch} to prevent useless latent space")
-                print(f"Best model was saved at epoch with val loss: {self.best_val_loss:.4f}")
-                break
             
             # =====================================================================
             # Regular Checkpointing
@@ -425,14 +408,13 @@ class MLXMGCVAETrainer:
             # Epoch Summary
             # =====================================================================
             
-            # Show both raw and capacity-controlled KL
-            kl_display = f"{train_losses['kl']:.4f}"
-            if 'kl_raw' in train_losses:
-                kl_display = f"{train_losses['kl']:.4f} (raw: {train_losses['kl_raw']:.4f})"
+            # Compute mean KL per graph for display
+            train_kl_mean = mx.mean(train_losses['kl_per_graph']).item()
+            val_kl_mean = mx.mean(val_losses['kl_per_graph']).item()
             
             print(f"Train Loss: {train_losses['total']:.4f} | Val Loss: {val_losses['total']:.4f}")
-            print(f"Recon: {train_losses['reconstruction']:.4f} | KL: {kl_display} | Prop: {train_losses['property']:.4f}")
-            print(f"Beta: {self.model.beta:.2f} | Capacity: {self.model.kl_capacity:.1f} | LR: {self.optimizer.learning_rate.item():.2e} | Patience: {self.patience_counter}/{self.max_patience}")
+            print(f"Recon: {train_losses['reconstruction']:.4f} | KL: {train_kl_mean:.4f} (target: {C_t:.4f}) | Prop: {train_losses['property']:.4f}")
+            print(f"Val KL: {val_kl_mean:.4f} | LR: {self.optimizer.learning_rate.item():.2e} | Patience: {self.patience_counter}/{self.max_patience}")
             
             # =====================================================================
             # Early Stopping
@@ -544,10 +526,9 @@ if __name__ == '__main__':
         'num_layers': 2,
         'heads': 4,
         'max_nodes': 20,
-        'beta': 0.0,         # KL divergence weight (annealed during training)
+        'beta': 1.0,         # KL divergence weight
         'gamma': 1.0,        # Property prediction weight
-        'dropout': 0.1,
-        'kl_capacity': 5.0   # Capacity control - only penalize KL above this threshold
+        'dropout': 0.1
     }
     
     model = MLXMGCVAE(**model_config)

@@ -1,5 +1,6 @@
 import mlx.core as mx
 import mlx.nn as nn
+import mlx.nn.init as init
 
 from .mlx_encoder import MLXGraphEncoder  # type: ignore
 from .mlx_pp import MLXPropertyPredictor  # type: ignore
@@ -23,13 +24,12 @@ class MLXMGCVAE(nn.Module):
         latent_dim=64,
         hidden_dim=128,
         num_properties=2,
-        num_layers=4,
+        num_layers=3,
         heads=4,
         max_nodes=20,
         beta=1.0,
         gamma=1.0,
-        dropout=0.1,
-        kl_capacity=0.0
+        dropout=0.1
     ):
         super().__init__()
         
@@ -46,7 +46,6 @@ class MLXMGCVAE(nn.Module):
         
         self.beta = beta    # KL divergence weight
         self.gamma = gamma  # Property prediction weight
-        self.kl_capacity = kl_capacity  # Minimum KL before penalty (free bits)
         
         # =====================================================================
         # Model Components
@@ -78,7 +77,9 @@ class MLXMGCVAE(nn.Module):
             max_nodes=max_nodes,
             dropout=dropout
         )
-    
+
+        self.log_sigma_sq_node = mx.zeros(1)
+            
     def reparameterize(self, mu, logvar):
         """
         Reparameterization trick: sample z ~ N(mu, sigma^2)
@@ -224,17 +225,19 @@ class MLXMGCVAE(nn.Module):
         total_recon_loss = node_recon_loss + edge_recon_loss
         
         # =====================================================================
-        # KL Divergence Loss with Capacity Control (Free Bits)
+        # KL Divergence Loss with Capacity Control
         # =====================================================================
         # Regularizes latent distribution: KL(q(z|x) || p(z)) where p(z) = N(0,I)
-        # Only penalize KL above capacity threshold to prevent posterior collapse
+        # Uses capacity control to encourage KL to match target schedule
         
-        kl_raw = -0.5 * mx.mean(
-            mx.sum(1 + logvar - mx.square(mu) - mx.exp(logvar), axis=1)
-        )
+        # Compute KL per graph (no reduction)
+        kl_per_graph = -0.5 * mx.sum(1 + logvar - mx.square(mu) - mx.exp(logvar), axis=1)
         
-        # Apply capacity: only penalize KL above threshold
-        kl_loss = mx.maximum(kl_raw - self.kl_capacity, 0.0)
+        # Get current capacity target from trainer (if available)
+        C_t = getattr(self, 'current_capacity', self.latent_dim * 0.8)
+        
+        # Capacity-controlled KL loss: |KL - C_t| encourages KL to track C_t exactly
+        kl_loss = mx.mean(mx.abs(kl_per_graph - C_t))
         
         # =====================================================================
         # Property Prediction Loss
@@ -255,69 +258,76 @@ class MLXMGCVAE(nn.Module):
             'node_recon_loss': node_recon_loss,
             'edge_recon_loss': edge_recon_loss,
             'kl_loss': kl_loss,
-            'kl_raw': kl_raw,  # Raw KL for monitoring
+            'kl_per_graph': kl_per_graph,  # For monitoring
+            'kl_target': C_t,              # For monitoring
             'property_loss': property_loss
         }
     
     def _compute_node_reconstruction_loss(self, batch, decoder_output, batch_size):
         """
-        Compute loss for node reconstruction - LOOPLESS VERSION
+        Compute node reconstruction loss with learnable observation noise.
+
+        Args:
+            batch: MLX GraphData batch containing:
+                - batch.x of shape [total_nodes, node_dim]
+                - batch.batch_indices of shape [total_nodes]
+                - optional batch.node_mask of shape [batch_size, max_nodes]
+            decoder_output: output from self.decoder, with attribute:
+                - node_logits of shape [batch_size, max_nodes, node_dim]
+            batch_size: integer number of graphs in the batch
+
+        Returns:
+            Scalar tensor: mean node reconstruction loss over the batch
         """
-        node_logits = decoder_output['node_logits']  # [batch_size, max_nodes, node_dim]
+        # 1. Get predicted node features [batch_size, max_nodes, node_dim]
+        preds = decoder_output['node_logits']
         
-        # Extract atom types from all nodes at once
-        node_indices = mx.argmax(batch.x[:, :10], axis=1)  # [total_nodes]
-        node_to_batch = batch.batch_indices  # [total_nodes]
-        
-        # Build target tensor using list comprehension (Python loop, but no .item() calls)
-        # This is unavoidable without scatter operations in MLX
-        total_nodes = batch.x.shape[0]
-        targets_data = []
-        masks_data = []
-        
+        # 2. Reshape true node features to match predictions
+        # First, pad true features to max_nodes per graph
+        padded_truths = []
         for b in range(batch_size):
-            # Get nodes for this batch (vectorized comparison)
-            batch_mask = node_to_batch == b
-            batch_node_indices = mx.where(batch_mask, node_indices, mx.zeros_like(node_indices))
+            # Get nodes for this batch - use Python loop since it's just batch size
+            batch_nodes = []
+            for i in range(batch.x.shape[0]):
+                if batch.batch_indices[i].item() == b:
+                    batch_nodes.append(batch.x[i])
+            batch_nodes = mx.stack(batch_nodes)
+            num_nodes = min(batch_nodes.shape[0], self.max_nodes)
             
-            # Count nodes in this batch
-            num_nodes = int(mx.sum(batch_mask.astype(mx.int32)).item())
-            num_nodes = min(num_nodes, self.max_nodes)
+            # Pad or truncate to max_nodes
+            if num_nodes < self.max_nodes:
+                padding = mx.zeros((self.max_nodes - num_nodes, self.node_dim))
+                batch_nodes = mx.concatenate([batch_nodes[:num_nodes], padding], axis=0)
+            else:
+                batch_nodes = batch_nodes[:self.max_nodes]
             
-            # Create row for this batch
-            row_targets = mx.zeros(self.max_nodes, dtype=mx.int32)
-            row_mask = mx.zeros(self.max_nodes, dtype=mx.bool_)
-            
-            if num_nodes > 0:
-                # Extract just the nodes for this batch
-                valid_indices = [node_indices[i] for i in range(total_nodes) if node_to_batch[i] == b][:num_nodes]
-                for pos, idx in enumerate(valid_indices):
-                    if pos < self.max_nodes:
-                        row_targets[pos] = idx
-                        row_mask[pos] = True
-            
-            targets_data.append(row_targets)
-            masks_data.append(row_mask)
+            padded_truths.append(batch_nodes)
         
-        target_nodes = mx.stack(targets_data)
-        masks = mx.stack(masks_data)
-        
-        # Compute loss (fully vectorized from here)
-        node_logits_flat = mx.reshape(node_logits, (-1, self.node_dim))
-        target_nodes_flat = mx.reshape(target_nodes, (-1,))
-        masks_flat = mx.reshape(masks, (-1,))
-        
-        node_logits_atoms = node_logits_flat[:, :10]
-        log_probs = node_logits_atoms - mx.logsumexp(node_logits_atoms, axis=-1, keepdims=True)
-        
-        batch_idx = mx.arange(target_nodes_flat.shape[0])
-        target_log_probs = log_probs[batch_idx, target_nodes_flat]
-        
-        masked_log_probs = target_log_probs * masks_flat.astype(mx.float32)
-        num_valid = mx.sum(masks_flat.astype(mx.float32))
-        
-        loss = mx.where(num_valid > 0, -mx.sum(masked_log_probs) / num_valid, mx.array(0.0))
-        return loss
+        # Stack to [batch_size, max_nodes, node_dim]
+        truths = mx.stack(padded_truths)
+
+        # 3. Compute sum of squared errors per node: shape [batch_size, max_nodes]
+        squared_error = mx.sum(mx.square(preds - truths), axis=-1)
+
+        # 4. Gaussian negative log likelihood with learnable variance
+        log_sigma_sq = self.log_sigma_sq_node[0]  # scalar tensor
+        sigma_sq = mx.exp(log_sigma_sq)
+        # per-node NLL: (1/(2σ²)) * ||x - x̂||² + 0.5 * log σ²
+        nll = squared_error / (2.0 * sigma_sq) + 0.5 * log_sigma_sq
+
+        # 5. Mask out padding nodes if mask is provided
+        if hasattr(batch, "node_mask"):
+            mask = batch.node_mask  # shape [batch_size, max_nodes]
+            nll = nll * mask
+            counts = mx.maximum(mx.sum(mask, axis=1, keepdims=True), 1.0)
+            per_graph_loss = mx.sum(nll, axis=1, keepdims=True) / counts
+            per_graph_loss = per_graph_loss.squeeze(axis=1)
+        else:
+            per_graph_loss = mx.mean(nll, axis=1)
+
+        # 6. Return mean loss over all graphs
+        return mx.mean(per_graph_loss)
+
     
     def _compute_edge_reconstruction_loss(self, batch, decoder_output, batch_size):
         """
