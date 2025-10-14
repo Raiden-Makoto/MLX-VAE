@@ -59,17 +59,17 @@ class MLXMGCVAETrainer:
         # =====================================================================
         
         self.train_metrics = {
-            'reconstruction': [],
-            'kl': [],
-            'property': [],
-            'total': []
+            'total_loss': [],
+            'reconstruction_loss': [],
+            'kl_loss': [],
+            'property_loss': []
         }
         
         self.val_metrics = {
-            'reconstruction': [],
-            'kl': [],
-            'property': [],
-            'total': []
+            'total_loss': [],
+            'reconstruction_loss': [],
+            'kl_loss': [],
+            'property_loss': []
         }
         
         # =====================================================================
@@ -145,10 +145,10 @@ class MLXMGCVAETrainer:
         self.model.train()
         
         epoch_losses = {
-            'total': 0,
-            'reconstruction': 0,
-            'kl': 0,
-            'property': 0
+            'total_loss': 0,
+            'reconstruction_loss': 0,
+            'kl_loss': 0,
+            'property_loss': 0
         }
         num_batches = 0
         
@@ -178,16 +178,13 @@ class MLXMGCVAETrainer:
             # =====================================================================
             
             for key in epoch_losses:
-                if f'{key}_loss' in loss_dict:
-                    epoch_losses[key] += loss_dict[f'{key}_loss'].item()
-            
-            # Also track raw KL if available (not a "_loss" key)
-            if 'kl_raw' in loss_dict:
-                if 'kl_raw' not in epoch_losses:
-                    epoch_losses['kl_raw'] = 0
-                epoch_losses['kl_raw'] += loss_dict['kl_raw'].item()
+                epoch_losses[key] += loss_dict[key].item()
             
             num_batches += 1
+            
+            # Debug print first batch
+            if num_batches == 1:
+                print("\nFirst batch loss keys:", list(loss_dict.keys()))
             
             # Update progress bar
             pbar.set_postfix({
@@ -208,10 +205,10 @@ class MLXMGCVAETrainer:
         self.model.eval()
         
         epoch_losses = {
-            'total': 0,
-            'reconstruction': 0,
-            'kl': 0,
-            'property': 0
+            'total_loss': 0,
+            'reconstruction_loss': 0,
+            'kl_loss': 0,
+            'property_loss': 0
         }
         num_batches = 0
         
@@ -222,14 +219,7 @@ class MLXMGCVAETrainer:
             
             # Accumulate losses
             for key in epoch_losses:
-                if f'{key}_loss' in loss_dict:
-                    epoch_losses[key] += loss_dict[f'{key}_loss'].item()
-            
-            # Also track raw KL if available
-            if 'kl_raw' in loss_dict:
-                if 'kl_raw' not in epoch_losses:
-                    epoch_losses['kl_raw'] = 0
-                epoch_losses['kl_raw'] += loss_dict['kl_raw'].item()
+                epoch_losses[key] += loss_dict[key].item()
             
             num_batches += 1
         
@@ -382,19 +372,21 @@ class MLXMGCVAETrainer:
             train_losses = self.train_epoch()
             val_losses = self.validate_epoch()
             
-            # Record metrics (skip kl_raw - only for monitoring)
-            for key in ['total', 'reconstruction', 'kl', 'property']:
-                if key in train_losses:
-                    self.train_metrics[key].append(train_losses[key])
-                if key in val_losses:
-                    self.val_metrics[key].append(val_losses[key])
+            # Debug print
+            print("\nTrain loss keys:", list(train_losses.keys()))
+            print("Val loss keys:", list(val_losses.keys()))
+            
+            # Record metrics
+            for key in ['total_loss', 'reconstruction_loss', 'kl_loss', 'property_loss']:
+                self.train_metrics[key].append(train_losses[key])
+                self.val_metrics[key].append(val_losses[key])
             
             # =====================================================================
             # Early Stopping Check
             # =====================================================================
             
-            if val_losses['total'] < self.best_val_loss:
-                self.best_val_loss = val_losses['total']
+            if val_losses['total_loss'] < self.best_val_loss:
+                self.best_val_loss = val_losses['total_loss']
                 self.patience_counter = 0
                 # Deep copy of model parameters using tree_map
                 from mlx.utils import tree_map
@@ -545,31 +537,16 @@ if __name__ == '__main__':
     # Test Set Evaluation
     print("\nEvaluating on test set...")
     model.eval()
-    test_losses = {
-        'total': 0,
-        'reconstruction': 0,
-        'kl': 0,
-        'property': 0
-    }
-    test_batches = 0
-    
-    for batch in tqdm(test_loader, desc='Testing'):
-        output = model(batch)
-        loss_dict = model.compute_loss(batch, output)
-        
-        for key in test_losses:
-            test_losses[key] += loss_dict[f'{key}_loss'].item()
-        test_batches += 1
-    
-    # Average test losses
-    for key in test_losses:
-        test_losses[key] /= test_batches
+    batch = next(iter(test_loader))
+    output = model(batch)
+    test_losses = model.compute_loss(batch, output)
+    test_losses = {k: v.item() for k, v in test_losses.items()}
     
     print("\nFinal Test Results:")
-    print(f"  Total Loss:         {test_losses['total']:.4f}")
-    print(f"  Reconstruction:     {test_losses['reconstruction']:.4f}")
-    print(f"  KL Divergence:      {test_losses['kl']:.4f}")
-    print(f"  Property Loss:      {test_losses['property']:.4f}")
+    print(f"  Total Loss:         {test_losses['total_loss']:.4f}")
+    print(f"  Reconstruction:     {test_losses['reconstruction_loss']:.4f}")
+    print(f"  KL Divergence:      {test_losses['kl_loss']:.4f}")
+    print(f"  Property Loss:      {test_losses['property_loss']:.4f}")
     
     print("\nEvaluating metrics...")
     _ = evaluate_property_prediction(model, test_loader)
