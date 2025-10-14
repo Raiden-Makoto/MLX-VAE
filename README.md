@@ -101,8 +101,8 @@ All components have been tested with actual inputs and are production-ready.
 
 ```bash
 # Clone repository
-git clone https://github.com/Raiden-Makoto/MCGVAE.git
-cd MCGVAE
+git clone https://github.com/Raiden-Makoto/MLX-GVAE.git
+cd MLX-GVAE
 
 # Install dependencies
 pip install -r requirements.txt
@@ -173,8 +173,8 @@ graphs, props = model.interpolate(
 ## Project Structure
 
 ```
-QVAE/
-├── mlx-train.py         # Main training script with MLXMGCVAETrainer
+MLX-GVAE/
+├── mlx_train.py         # Main training script with MLXMGCVAETrainer
 │
 ├── mlx-models/          # Neural network components
 │   ├── mlx-vae.py           # MLXMGCVAE (complete VAE model)
@@ -309,7 +309,7 @@ If you use this code in your research, please cite:
   title={MGCVAE: Multi-objective Graph Conditional VAE for Apple Silicon},
   author={Your Name},
   year={2025},
-  url={https://github.com/Raiden-Makoto/MCGVAE}
+  url={https://github.com/Raiden-Makoto/MLX-GVAE}
 }
 ```
 

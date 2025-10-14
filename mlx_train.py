@@ -80,6 +80,7 @@ class MLXMGCVAETrainer:
         self.patience_counter = 0
         self.max_patience = 30
         self.best_model_weights = None
+        self.min_kl_threshold = 0.3  # Stop if KL drops below this (posterior collapse)
     
     def load_checkpoint(self, checkpoint_path):
         """
@@ -359,6 +360,17 @@ class MLXMGCVAETrainer:
                 self.patience_counter += 1
             
             # =====================================================================
+            # Posterior Collapse Detection
+            # =====================================================================
+            
+            # Stop if KL divergence drops too low (posterior collapse)
+            if val_losses['kl'] < self.min_kl_threshold:
+                print(f"\n🚨 Posterior collapse detected! KL = {val_losses['kl']:.4f} < {self.min_kl_threshold}")
+                print(f"Stopping at epoch {epoch} to prevent useless latent space")
+                print(f"Best model was saved at epoch with val loss: {self.best_val_loss:.4f}")
+                break
+            
+            # =====================================================================
             # Regular Checkpointing
             # =====================================================================
             
@@ -411,8 +423,8 @@ if __name__ == '__main__':
                         help='Number of epochs to train')
     parser.add_argument('--batch-size', type=int, default=32,
                         help='Batch size for training')
-    parser.add_argument('--lr', type=float, default=1e-3,
-                        help='Learning rate')
+    parser.add_argument('--lr', type=float, default=5e-4,
+                        help='Learning rate (default: 5e-4 for stable training)')
     parser.add_argument('--no-plot', action='store_true',
                         help='Disable training curve plots (useful for servers/headless environments)')
     
@@ -483,7 +495,7 @@ if __name__ == '__main__':
         'num_layers': 2,
         'heads': 4,
         'max_nodes': 20,
-        'beta': 0.01,        # KL divergence weight
+        'beta': 2.0,         # KL divergence weight (high to prevent posterior collapse)
         'gamma': 1.0,        # Property prediction weight
         'dropout': 0.1
     }
