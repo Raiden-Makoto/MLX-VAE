@@ -81,6 +81,15 @@ class MLXMGCVAETrainer:
         self.max_patience = 30
         self.best_model_weights = None
         self.min_kl_threshold = 0.3  # Stop if KL drops below this (posterior collapse)
+        
+        # KL annealing with capacity control (free bits)
+        self.initial_beta = self.model.beta
+        self.target_beta = 1.0  # Target beta value
+        self.initial_capacity = 5.0  # Start with high capacity (allow high KL)
+        self.target_capacity = 0.0  # End with zero capacity (full KL penalty)
+        self.anneal_every = 2  # Anneal every N epochs
+        self.beta_anneal_rate = 0.2  # Increase beta by this each time
+        self.capacity_anneal_rate = 0.5  # Decrease capacity by this each time
     
     def load_checkpoint(self, checkpoint_path):
         """
@@ -169,7 +178,15 @@ class MLXMGCVAETrainer:
             # =====================================================================
             
             for key in epoch_losses:
-                epoch_losses[key] += loss_dict[f'{key}_loss'].item()
+                if f'{key}_loss' in loss_dict:
+                    epoch_losses[key] += loss_dict[f'{key}_loss'].item()
+            
+            # Also track raw KL if available (not a "_loss" key)
+            if 'kl_raw' in loss_dict:
+                if 'kl_raw' not in epoch_losses:
+                    epoch_losses['kl_raw'] = 0
+                epoch_losses['kl_raw'] += loss_dict['kl_raw'].item()
+            
             num_batches += 1
             
             # Update progress bar
@@ -205,7 +222,15 @@ class MLXMGCVAETrainer:
             
             # Accumulate losses
             for key in epoch_losses:
-                epoch_losses[key] += loss_dict[f'{key}_loss'].item()
+                if f'{key}_loss' in loss_dict:
+                    epoch_losses[key] += loss_dict[f'{key}_loss'].item()
+            
+            # Also track raw KL if available
+            if 'kl_raw' in loss_dict:
+                if 'kl_raw' not in epoch_losses:
+                    epoch_losses['kl_raw'] = 0
+                epoch_losses['kl_raw'] += loss_dict['kl_raw'].item()
+            
             num_batches += 1
         
         # Average losses over batches
@@ -336,16 +361,35 @@ class MLXMGCVAETrainer:
             print(f"\nEpoch {epoch}/{end_epoch}")
             
             # =====================================================================
+            # KL Annealing - Gradually increase beta and decrease capacity
+            # =====================================================================
+            
+            if epoch > 1 and (epoch - 1) % self.anneal_every == 0:
+                # Increase beta
+                old_beta = self.model.beta
+                new_beta = min(old_beta + self.beta_anneal_rate, self.target_beta)
+                self.model.beta = new_beta
+                
+                # Decrease capacity (allow less "free" KL)
+                old_capacity = self.model.kl_capacity
+                new_capacity = max(old_capacity - self.capacity_anneal_rate, self.target_capacity)
+                self.model.kl_capacity = new_capacity
+                
+                print(f"  📈 KL Annealing: beta {old_beta:.2f}→{new_beta:.2f}, capacity {old_capacity:.1f}→{new_capacity:.1f}")
+            
+            # =====================================================================
             # Training and Validation
             # =====================================================================
             
             train_losses = self.train_epoch()
             val_losses = self.validate_epoch()
             
-            # Record metrics
-            for key in train_losses:
-                self.train_metrics[key].append(train_losses[key])
-                self.val_metrics[key].append(val_losses[key])
+            # Record metrics (skip kl_raw - only for monitoring)
+            for key in ['total', 'reconstruction', 'kl', 'property']:
+                if key in train_losses:
+                    self.train_metrics[key].append(train_losses[key])
+                if key in val_losses:
+                    self.val_metrics[key].append(val_losses[key])
             
             # =====================================================================
             # Early Stopping Check
@@ -381,9 +425,14 @@ class MLXMGCVAETrainer:
             # Epoch Summary
             # =====================================================================
             
+            # Show both raw and capacity-controlled KL
+            kl_display = f"{train_losses['kl']:.4f}"
+            if 'kl_raw' in train_losses:
+                kl_display = f"{train_losses['kl']:.4f} (raw: {train_losses['kl_raw']:.4f})"
+            
             print(f"Train Loss: {train_losses['total']:.4f} | Val Loss: {val_losses['total']:.4f}")
-            print(f"Recon: {train_losses['reconstruction']:.4f} | KL: {train_losses['kl']:.4f} | Prop: {train_losses['property']:.4f}")
-            print(f"LR: {self.optimizer.learning_rate.item():.2e} | Patience: {self.patience_counter}/{self.max_patience}")
+            print(f"Recon: {train_losses['reconstruction']:.4f} | KL: {kl_display} | Prop: {train_losses['property']:.4f}")
+            print(f"Beta: {self.model.beta:.2f} | Capacity: {self.model.kl_capacity:.1f} | LR: {self.optimizer.learning_rate.item():.2e} | Patience: {self.patience_counter}/{self.max_patience}")
             
             # =====================================================================
             # Early Stopping
@@ -495,9 +544,10 @@ if __name__ == '__main__':
         'num_layers': 2,
         'heads': 4,
         'max_nodes': 20,
-        'beta': 2.0,         # KL divergence weight (high to prevent posterior collapse)
+        'beta': 0.0,         # KL divergence weight (annealed during training)
         'gamma': 1.0,        # Property prediction weight
-        'dropout': 0.1
+        'dropout': 0.1,
+        'kl_capacity': 5.0   # Capacity control - only penalize KL above this threshold
     }
     
     model = MLXMGCVAE(**model_config)

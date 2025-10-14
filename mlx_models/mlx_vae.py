@@ -28,7 +28,8 @@ class MLXMGCVAE(nn.Module):
         max_nodes=20,
         beta=1.0,
         gamma=1.0,
-        dropout=0.1
+        dropout=0.1,
+        kl_capacity=0.0
     ):
         super().__init__()
         
@@ -45,6 +46,7 @@ class MLXMGCVAE(nn.Module):
         
         self.beta = beta    # KL divergence weight
         self.gamma = gamma  # Property prediction weight
+        self.kl_capacity = kl_capacity  # Minimum KL before penalty (free bits)
         
         # =====================================================================
         # Model Components
@@ -222,13 +224,17 @@ class MLXMGCVAE(nn.Module):
         total_recon_loss = node_recon_loss + edge_recon_loss
         
         # =====================================================================
-        # KL Divergence Loss
+        # KL Divergence Loss with Capacity Control (Free Bits)
         # =====================================================================
         # Regularizes latent distribution: KL(q(z|x) || p(z)) where p(z) = N(0,I)
+        # Only penalize KL above capacity threshold to prevent posterior collapse
         
-        kl_loss = -0.5 * mx.mean(
+        kl_raw = -0.5 * mx.mean(
             mx.sum(1 + logvar - mx.square(mu) - mx.exp(logvar), axis=1)
         )
+        
+        # Apply capacity: only penalize KL above threshold
+        kl_loss = mx.maximum(kl_raw - self.kl_capacity, 0.0)
         
         # =====================================================================
         # Property Prediction Loss
@@ -249,6 +255,7 @@ class MLXMGCVAE(nn.Module):
             'node_recon_loss': node_recon_loss,
             'edge_recon_loss': edge_recon_loss,
             'kl_loss': kl_loss,
+            'kl_raw': kl_raw,  # Raw KL for monitoring
             'property_loss': property_loss
         }
     
