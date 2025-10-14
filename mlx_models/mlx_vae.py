@@ -258,8 +258,8 @@ class MLXMGCVAE(nn.Module):
             'node_recon_loss': node_recon_loss,
             'edge_recon_loss': edge_recon_loss,
             'kl_loss': kl_loss,
-            'kl_per_graph': kl_per_graph,  # For monitoring
-            'kl_target': C_t,              # For monitoring
+            # 'kl_per_graph': kl_per_graph,  # For monitoring (commented out - causes .item() conversion errors)
+            # 'kl_target': C_t,              # For monitoring (commented out - causes .item() conversion errors)
             'property_loss': property_loss
         }
     

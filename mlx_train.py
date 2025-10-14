@@ -272,8 +272,8 @@ class MLXMGCVAETrainer:
         # Total Loss
         # =====================================================================
         
-        axes[0, 0].plot(self.train_metrics['total'], label='Train', alpha=0.8)
-        axes[0, 0].plot(self.val_metrics['total'], label='Val', alpha=0.8)
+        axes[0, 0].plot(self.train_metrics['total_loss'], label='Train', alpha=0.8)
+        axes[0, 0].plot(self.val_metrics['total_loss'], label='Val', alpha=0.8)
         axes[0, 0].set_title('Total Loss')
         axes[0, 0].set_xlabel('Epoch')
         axes[0, 0].set_ylabel('Loss')
@@ -284,8 +284,8 @@ class MLXMGCVAETrainer:
         # Reconstruction Loss
         # =====================================================================
         
-        axes[0, 1].plot(self.train_metrics['reconstruction'], label='Train', alpha=0.8)
-        axes[0, 1].plot(self.val_metrics['reconstruction'], label='Val', alpha=0.8)
+        axes[0, 1].plot(self.train_metrics['reconstruction_loss'], label='Train', alpha=0.8)
+        axes[0, 1].plot(self.val_metrics['reconstruction_loss'], label='Val', alpha=0.8)
         axes[0, 1].set_title('Reconstruction Loss')
         axes[0, 1].set_xlabel('Epoch')
         axes[0, 1].set_ylabel('Loss')
@@ -296,8 +296,8 @@ class MLXMGCVAETrainer:
         # KL Divergence
         # =====================================================================
         
-        axes[1, 0].plot(self.train_metrics['kl'], label='Train', alpha=0.8)
-        axes[1, 0].plot(self.val_metrics['kl'], label='Val', alpha=0.8)
+        axes[1, 0].plot(self.train_metrics['kl_loss'], label='Train', alpha=0.8)
+        axes[1, 0].plot(self.val_metrics['kl_loss'], label='Val', alpha=0.8)
         axes[1, 0].set_title('KL Divergence')
         axes[1, 0].set_xlabel('Epoch')
         axes[1, 0].set_ylabel('Loss')
@@ -308,8 +308,8 @@ class MLXMGCVAETrainer:
         # Property Prediction Loss
         # =====================================================================
         
-        axes[1, 1].plot(self.train_metrics['property'], label='Train', alpha=0.8)
-        axes[1, 1].plot(self.val_metrics['property'], label='Val', alpha=0.8)
+        axes[1, 1].plot(self.train_metrics['property_loss'], label='Train', alpha=0.8)
+        axes[1, 1].plot(self.val_metrics['property_loss'], label='Val', alpha=0.8)
         axes[1, 1].set_title('Property Prediction Loss')
         axes[1, 1].set_xlabel('Epoch')
         axes[1, 1].set_ylabel('Loss')
@@ -394,14 +394,6 @@ class MLXMGCVAETrainer:
             
             if epoch % 10 == 0:
                 self.save_checkpoint(epoch)
-            
-            # =====================================================================
-            # Epoch Summary
-            # =====================================================================
-            
-            print(f"Train Loss: {train_losses['total_loss']:.4f} | Val Loss: {val_losses['total_loss']:.4f}")
-            print(f"Recon: {train_losses['reconstruction_loss']:.4f} | KL: {train_losses['kl_loss']:.4f} (target: {C_t:.4f}) | Prop: {train_losses['property_loss']:.4f}")
-            print(f"Val KL: {val_losses['kl_loss']:.4f} | LR: {self.optimizer.learning_rate.item():.2e} | Patience: {self.patience_counter}/{self.max_patience}")
             
             # =====================================================================
             # Early Stopping
