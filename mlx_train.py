@@ -182,10 +182,6 @@ class MLXMGCVAETrainer:
             
             num_batches += 1
             
-            # Debug print first batch
-            if num_batches == 1:
-                print("\nFirst batch loss keys:", list(loss_dict.keys()))
-            
             # Update progress bar
             pbar.set_postfix({
                 'Loss': f"{loss_dict['total_loss'].item():.4f}",
@@ -371,10 +367,6 @@ class MLXMGCVAETrainer:
             
             train_losses = self.train_epoch()
             val_losses = self.validate_epoch()
-            
-            # Debug print
-            print("\nTrain loss keys:", list(train_losses.keys()))
-            print("Val loss keys:", list(val_losses.keys()))
             
             # Record metrics
             for key in ['total_loss', 'reconstruction_loss', 'kl_loss', 'property_loss']:
