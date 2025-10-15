@@ -10,7 +10,7 @@ import numpy as np
 from tqdm import tqdm
 
 from mlx_data.mlx_dataset import QM9GraphDataset  # type: ignore
-from mlx_models.mlx_vae import MLXMGCVAE  # type: ignore
+from mlx_models.mlx_mgcvae import MLXMGCVAE  # type: ignore
 from mlx_graphs.loaders import Dataloader  # type: ignore
 from mlx_utils.mlx_metrics import (
     evaluate_property_prediction,
@@ -87,7 +87,7 @@ class MLXMGCVAETrainer:
         self.best_model_weights = None
         
         # Capacity control configuration
-        self.C_max = self.model.latent_dim * 0.8  # Target capacity (nats per latent dim)
+        self.C_max = self.model.latent_dim * 0.55  # Target capacity (nats per latent dim) - lowered from 0.8 to match achievable KL
         self.warmup_epochs = 5                     # Epochs to reach full capacity
         self.gamma = 1.0                          # Deprecated: gamma is now in model config
     
@@ -190,13 +190,15 @@ class MLXMGCVAETrainer:
             num_batches += 1
             
             # Update progress bar
-            pbar.set_postfix({
+            postfix = {
                 'Loss': f"{loss_dict['total_loss'].item():.4f}",
                 'Recon': f"{loss_dict['reconstruction_loss'].item():.4f}",
                 'KL_div': f"{loss_dict['kl_divergence'].item():.4f}",  # Actual KL divergence
-                'KL_loss': f"{loss_dict['kl_loss'].item():.4f}",  # |KL - Ct|
-                'Prop': f"{loss_dict['property_loss'].item():.4f}"
-            })
+                'KL_loss': f"{loss_dict['kl_loss'].item():.4f}"  # |KL - Ct|
+            }
+            if self.model.condition:
+                postfix['Prop'] = f"{loss_dict['property_loss'].item():.4f}"
+            pbar.set_postfix(postfix)
         
         # Average losses over batches
         for key in epoch_losses:
@@ -321,13 +323,16 @@ class MLXMGCVAETrainer:
         # Property Prediction Loss
         # =====================================================================
         
-        axes[1, 1].plot(self.train_metrics['property_loss'], label='Train', alpha=0.8)
-        axes[1, 1].plot(self.val_metrics['property_loss'], label='Val', alpha=0.8)
-        axes[1, 1].set_title('Property Prediction Loss')
-        axes[1, 1].set_xlabel('Epoch')
-        axes[1, 1].set_ylabel('Loss')
-        axes[1, 1].legend()
-        axes[1, 1].grid(True, alpha=0.3)
+        if self.model.condition:
+            axes[1, 1].plot(self.train_metrics['property_loss'], label='Train', alpha=0.8)
+            axes[1, 1].plot(self.val_metrics['property_loss'], label='Val', alpha=0.8)
+            axes[1, 1].set_title('Property Prediction Loss')
+            axes[1, 1].set_xlabel('Epoch')
+            axes[1, 1].set_ylabel('Loss')
+            axes[1, 1].legend()
+            axes[1, 1].grid(True, alpha=0.3)
+        else:
+            axes[1, 1].axis('off')
         
         plt.tight_layout()
         
@@ -462,12 +467,24 @@ if __name__ == '__main__':
                         help='Learning rate (default: 5e-4 for stable training)')
     parser.add_argument('--no-plot', action='store_true',
                         help='Disable training curve plots (useful for servers/headless environments)')
+    parser.add_argument('--data', type=str, default='1',
+                        help='Data split to use: "1", "2", "3", or custom path (default: "1")')
+    parser.add_argument('--condition', action='store_true',
+                        help='Enable property conditioning (compute and include property loss)')
     
     args = parser.parse_args()
     
+    # Determine data path
+    if args.data in ['1', '2', '3']:
+        data_path = f'mlx_data/qm9_mlx_part{args.data}.csv'
+    else:
+        data_path = args.data
+    
+    print(f"Loading data from: {data_path}")
+    
     # Load Dataset
     dataset = QM9GraphDataset(
-        csv_path="mlx_data/qm9_mlx_part2.csv",
+        csv_path=data_path,
         smiles_col="smiles",
         label_col="p_np"
     )
@@ -501,8 +518,9 @@ if __name__ == '__main__':
         'heads': 4,
         'max_nodes': 20,
         'beta': 1.0,         # Deprecated: kept for backwards compatibility
-        'gamma': 1.0,        # Capacity-controlled KL weight (Loss = Recon + Prop + γ⋅|KL-Ct|)
-        'dropout': 0.1
+        'gamma': 0.3,        # Capacity-controlled KL weight (Loss = Recon + Prop + γ⋅|KL-Ct|)
+        'dropout': 0.1,
+        'condition': args.condition  # Enable/disable property conditioning
     }
     
     model = MLXMGCVAE(**model_config)
@@ -579,9 +597,10 @@ if __name__ == '__main__':
     print(f"  Property Loss:      {test_losses['property_loss']:.4f}")
     
     print("\nEvaluating metrics...")
-    _ = evaluate_property_prediction(model, test_loader)
     _ = evaluate_reconstruction_and_kl(model, test_loader)
-    _ = evaluate_conditioning_latent(model, target=[0.9], num_samples=100, tolerance=0.1)
+    if args.condition:
+        _ = evaluate_property_prediction(model, test_loader)
+        _ = evaluate_conditioning_latent(model, target=[0.9], num_samples=100, tolerance=0.1)
     
     print("\n" + "="*70)
     print("Training completed successfully!")
