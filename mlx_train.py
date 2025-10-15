@@ -89,33 +89,38 @@ class MLXMGCVAETrainer:
         # Capacity control configuration
         self.C_max = self.model.latent_dim * 0.8  # Target capacity (nats per latent dim)
         self.warmup_epochs = 5                     # Epochs to reach full capacity
-        self.gamma = 1.0                          # KL penalty weight
+        self.gamma = 1.0                          # Deprecated: gamma is now in model config
     
-    def load_checkpoint(self, checkpoint_path):
+    def load_checkpoint(self, checkpoint_path, silent=False):
         """
         Load model and training state from checkpoint
         
         Args:
             checkpoint_path: Path to checkpoint .npz file
+            silent: If True, suppress print statements
         
         Returns:
             epoch: The epoch number to resume from
         """
-        print(f"\nLoading checkpoint from {checkpoint_path}...")
+        if not silent:
+            print(f"\nLoading checkpoint from {checkpoint_path}...")
         
         if not os.path.exists(checkpoint_path):
-            print(f"  ✗ Checkpoint not found: {checkpoint_path}")
-            print("  Starting with fresh model weights")
+            if not silent:
+                print(f"  ✗ Checkpoint not found: {checkpoint_path}")
+                print("  Starting with fresh model weights")
             return 0
         
         # Load checkpoint using MLX's built-in load_weights
         try:
             self.model.load_weights(checkpoint_path)
-            print(f"  ✓ Model weights loaded successfully")
+            if not silent:
+                print(f"  ✓ Model weights loaded successfully")
         
         except Exception as e:
-            print(f"  ✗ Failed to load checkpoint: {e}")
-            print("  Starting with fresh model weights")
+            if not silent:
+                print(f"  ✗ Failed to load checkpoint: {e}")
+                print("  Starting with fresh model weights")
             return 0
         
         # Load metadata
@@ -131,13 +136,15 @@ class MLXMGCVAETrainer:
             
             epoch = metadata.get('epoch', 0)
             
-            print(f"  ✓ Loaded checkpoint from epoch {epoch}")
-            print(f"  ✓ Best validation loss: {self.best_val_loss:.4f}")
-            print(f"  ✓ Training history restored")
+            if not silent:
+                print(f"  ✓ Loaded checkpoint from epoch {epoch}")
+                print(f"  ✓ Best validation loss: {self.best_val_loss:.4f}")
+                print(f"  ✓ Training history restored")
             
             return epoch
         else:
-            print("  ⚠ Metadata not found, only model weights loaded")
+            if not silent:
+                print("  ⚠ Metadata not found, only model weights loaded")
             return 0
     
     def train_epoch(self):
@@ -186,7 +193,8 @@ class MLXMGCVAETrainer:
             pbar.set_postfix({
                 'Loss': f"{loss_dict['total_loss'].item():.4f}",
                 'Recon': f"{loss_dict['reconstruction_loss'].item():.4f}",
-                'KL': f"{loss_dict['kl_loss'].item():.4f}",
+                'KL_div': f"{loss_dict['kl_divergence'].item():.4f}",  # Actual KL divergence
+                'KL_loss': f"{loss_dict['kl_loss'].item():.4f}",  # |KL - Ct|
                 'Prop': f"{loss_dict['property_loss'].item():.4f}"
             })
         
@@ -253,7 +261,12 @@ class MLXMGCVAETrainer:
         with open(metadata_path, 'w') as f:
             json.dump(metadata, f, indent=2)
         
-        # Save best model
+        # Save latest epoch number (for resuming from most recent epoch)
+        latest_epoch_path = os.path.join(self.save_dir, 'latest_epoch.txt')
+        with open(latest_epoch_path, 'w') as f:
+            f.write(str(epoch))
+        
+        # Save best model (for final evaluation)
         if is_best:
             best_path = os.path.join(self.save_dir, 'best_model.npz')
             self.model.save_weights(best_path)
@@ -356,7 +369,14 @@ class MLXMGCVAETrainer:
             
             # Compute current capacity target based on schedule
             C_t = self.C_max * min(1.0, epoch / self.warmup_epochs)
-            print(f"  Capacity target: {C_t:.4f} nats")
+            
+            # Print capacity status
+            if epoch == self.warmup_epochs:
+                print(f"  Capacity target: {C_t:.4f} nats (warmup complete, now tracking best model)")
+            elif epoch > self.warmup_epochs:
+                print(f"  Capacity target: {C_t:.4f} nats")
+            else:
+                print(f"  Capacity target: {C_t:.4f} nats (warmup phase {epoch}/{self.warmup_epochs})")
             
             # Update model's capacity target
             self.model.current_capacity = C_t
@@ -374,25 +394,30 @@ class MLXMGCVAETrainer:
                 self.val_metrics[key].append(val_losses[key])
             
             # =====================================================================
-            # Early Stopping Check
+            # Early Stopping Check (only after warmup)
             # =====================================================================
             
-            if val_losses['total_loss'] < self.best_val_loss:
-                self.best_val_loss = val_losses['total_loss']
-                self.patience_counter = 0
-                # Deep copy of model parameters using tree_map
-                from mlx.utils import tree_map
-                self.best_model_weights = tree_map(lambda x: mx.array(x), self.model.parameters())
-                self.save_checkpoint(epoch, is_best=True)
+            # Only start tracking best model when capacity reaches maximum
+            if epoch >= self.warmup_epochs:
+                if val_losses['total_loss'] < self.best_val_loss:
+                    self.best_val_loss = val_losses['total_loss']
+                    self.patience_counter = 0
+                    # Deep copy of model parameters using tree_map
+                    from mlx.utils import tree_map
+                    self.best_model_weights = tree_map(lambda x: mx.array(x), self.model.parameters())
+                    self.save_checkpoint(epoch, is_best=True)
+                else:
+                    self.patience_counter += 1
             else:
-                self.patience_counter += 1
+                print(f"  Warmup phase: not tracking best model yet")
             
             
             # =====================================================================
             # Regular Checkpointing
             # =====================================================================
             
-            if epoch % 10 == 0:
+            # Save checkpoint at end of warmup and every 10 epochs
+            if epoch == self.warmup_epochs or epoch % 10 == 0:
                 self.save_checkpoint(epoch)
             
             # =====================================================================
@@ -427,8 +452,8 @@ if __name__ == '__main__':
     # =========================================================================
     
     parser = argparse.ArgumentParser(description='Train MLXMGCVAE model')
-    parser.add_argument('--resume', type=str, nargs='?', const='checkpoints/mlx_mgcvae/best_model.npz', default=None,
-                        help='Resume from checkpoint. Optionally specify path, defaults to best_model.npz')
+    parser.add_argument('--resume', type=str, nargs='?', const='auto', default=None,
+                        help='Resume from checkpoint. Use "auto" or "latest" for most recent epoch, or specify checkpoint path')
     parser.add_argument('--epochs', type=int, default=10,
                         help='Number of epochs to train')
     parser.add_argument('--batch-size', type=int, default=32,
@@ -475,8 +500,8 @@ if __name__ == '__main__':
         'num_layers': 2,
         'heads': 4,
         'max_nodes': 20,
-        'beta': 1.0,         # KL divergence weight
-        'gamma': 1.0,        # Property prediction weight
+        'beta': 1.0,         # Deprecated: kept for backwards compatibility
+        'gamma': 1.0,        # Capacity-controlled KL weight (Loss = Recon + Prop + γ⋅|KL-Ct|)
         'dropout': 0.1
     }
     
@@ -495,7 +520,28 @@ if __name__ == '__main__':
     # Resume from Checkpoint (if specified)
     start_epoch = 1
     if args.resume:
-        loaded_epoch = trainer.load_checkpoint(args.resume)
+        # Load best model weights for continued training
+        if args.resume in ['auto', 'latest']:
+            print(f"\nAuto-resuming training...")
+            
+            # Load best model weights (silently to avoid confusing messages)
+            best_model_path = os.path.join(trainer.save_dir, 'best_model.npz')
+            best_epoch = trainer.load_checkpoint(best_model_path, silent=True)
+            
+            # Get the actual epoch number to resume from
+            latest_epoch_path = os.path.join(trainer.save_dir, 'latest_epoch.txt')
+            if os.path.exists(latest_epoch_path):
+                with open(latest_epoch_path, 'r') as f:
+                    loaded_epoch = int(f.read().strip())
+                print(f"  ✓ Loaded best model weights (from epoch {best_epoch}, val_loss: {trainer.best_val_loss:.4f})")
+                print(f"  ✓ Resuming training from epoch {loaded_epoch + 1}")
+            else:
+                loaded_epoch = 0
+                print(f"  ⚠ latest_epoch.txt not found, starting from epoch 1")
+        else:
+            # Load from specific checkpoint path
+            loaded_epoch = trainer.load_checkpoint(args.resume)
+        
         start_epoch = loaded_epoch + 1
     
     train_metrics, val_metrics = trainer.train(
@@ -529,7 +575,7 @@ if __name__ == '__main__':
     print("\nFinal Test Results:")
     print(f"  Total Loss:         {test_losses['total_loss']:.4f}")
     print(f"  Reconstruction:     {test_losses['reconstruction_loss']:.4f}")
-    print(f"  KL Divergence:      {test_losses['kl_loss']:.4f}")
+    print(f"  KL Loss:            {test_losses['kl_loss']:.4f}")
     print(f"  Property Loss:      {test_losses['property_loss']:.4f}")
     
     print("\nEvaluating metrics...")

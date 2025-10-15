@@ -67,19 +67,19 @@ def evaluate_reconstruction_and_kl(model, data_loader):
     """
     model.eval()
     recon_loss = 0.0
-    kl_loss = 0.0
+    kl_divergence = 0.0
     total_batches = 0
 
     for batch in data_loader:
         out = model(batch)
         losses = model.compute_loss(batch, out)
         recon_loss += losses['reconstruction_loss'].item()
-        kl_loss += losses['kl_loss'].item()
+        kl_divergence += losses['kl_divergence'].item()  # Use actual KL divergence, not the loss
         total_batches += 1
 
     print(f"Avg Reconstruction Loss: {recon_loss/total_batches:.4f}")
-    print(f"Avg KL Divergence: {kl_loss/total_batches:.4f}")
-    return recon_loss/total_batches, kl_loss/total_batches
+    print(f"Avg KL Divergence: {kl_divergence/total_batches:.4f}")
+    return recon_loss/total_batches, kl_divergence/total_batches
 
 
 # =============================================================================

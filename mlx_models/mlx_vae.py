@@ -43,9 +43,10 @@ class MLXMGCVAE(nn.Module):
         # =====================================================================
         # Loss Weighting Parameters
         # =====================================================================
+        # Total Loss = Reconstruction + Property + γ⋅|KL - C_t|
         
-        self.beta = beta    # KL divergence weight
-        self.gamma = gamma  # Property prediction weight
+        self.beta = beta    # Deprecated: kept for backwards compatibility
+        self.gamma = gamma  # Capacity-controlled KL divergence weight
         
         # =====================================================================
         # Model Components
@@ -190,9 +191,15 @@ class MLXMGCVAE(nn.Module):
     
     def compute_loss(self, batch, model_output):
         """
-        Compute multi-objective VAE loss
+        Compute multi-objective VAE loss with capacity control
         
-        Loss = Reconstruction + β*KL_divergence + γ*Property_prediction
+        Loss = Reconstruction + Property + γ⋅|KL - C_t|
+        
+        Where:
+        - Reconstruction: Node and edge reconstruction losses
+        - Property: Property prediction MSE
+        - |KL - C_t|: Capacity-controlled KL divergence
+        - γ (gamma): Weight for capacity-controlled KL term
         
         Args:
             batch: Input batch
@@ -236,6 +243,9 @@ class MLXMGCVAE(nn.Module):
         # Get current capacity target from trainer (if available)
         C_t = getattr(self, 'current_capacity', self.latent_dim * 0.8)
         
+        # Actual KL divergence (for monitoring)
+        kl_divergence = mx.mean(kl_per_graph)
+        
         # Capacity-controlled KL loss: |KL - C_t| encourages KL to track C_t exactly
         kl_loss = mx.mean(mx.abs(kl_per_graph - C_t))
         
@@ -249,8 +259,9 @@ class MLXMGCVAE(nn.Module):
         # =====================================================================
         # Combined Loss
         # =====================================================================
+        # Total Loss = Reconstruction + Property + γ⋅|KL - C_t|
         
-        total_loss = total_recon_loss + self.beta * kl_loss + self.gamma * property_loss
+        total_loss = total_recon_loss + property_loss + self.gamma * kl_loss
         
         return {
             'total_loss': total_loss,
@@ -258,6 +269,7 @@ class MLXMGCVAE(nn.Module):
             'node_recon_loss': node_recon_loss,
             'edge_recon_loss': edge_recon_loss,
             'kl_loss': kl_loss,
+            'kl_divergence': kl_divergence,  # Actual KL value (for monitoring)
             # 'kl_per_graph': kl_per_graph,  # For monitoring (commented out - causes .item() conversion errors)
             # 'kl_target': C_t,              # For monitoring (commented out - causes .item() conversion errors)
             'property_loss': property_loss
