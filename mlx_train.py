@@ -467,8 +467,8 @@ if __name__ == '__main__':
                         help='Learning rate (default: 5e-4 for stable training)')
     parser.add_argument('--no-plot', action='store_true',
                         help='Disable training curve plots (useful for servers/headless environments)')
-    parser.add_argument('--data', type=str, default='1',
-                        help='Data split to use: "1", "2", "3", or custom path (default: "1")')
+    parser.add_argument('--data', type=str, default='',
+                        help='Data split: "1", "2", "3"; leave empty for full dataset; or custom CSV path')
     parser.add_argument('--condition', action='store_true',
                         help='Enable property conditioning (compute and include property loss)')
     
@@ -477,6 +477,8 @@ if __name__ == '__main__':
     # Determine data path
     if args.data in ['1', '2', '3']:
         data_path = f'mlx_data/qm9_mlx_part{args.data}.csv'
+    elif args.data in [None, '', 'all', 'full']:
+        data_path = 'mlx_data/qm9_mlx.csv'
     else:
         data_path = args.data
     
