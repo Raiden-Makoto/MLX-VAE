@@ -1,9 +1,21 @@
 import mlx.core as mx
 import numpy as np
+import argparse
+import os
+import sys
+from pathlib import Path
+
+# Ensure project root is on sys.path for package imports when running as a script
+PROJECT_ROOT = str(Path(__file__).resolve().parents[1])
+if PROJECT_ROOT not in sys.path:
+    sys.path.append(PROJECT_ROOT)
+
+from mlx_models.mlx_mgcvae import MLXMGCVAE  # type: ignore
 
 # Optional RDKit import
 try:
     from rdkit import Chem
+    from rdkit.Chem import Draw
     RDKIT_AVAILABLE = True
 except ImportError:
     RDKIT_AVAILABLE = False
@@ -127,6 +139,14 @@ def logits_to_molecule(sampled_graphs, graph_idx=0, validity_check=True):
             # Check for reasonable number of atoms
             if mol.GetNumAtoms() == 0:
                 return {'smiles': '', 'mol': None, 'valid': False}
+            
+            # Connectivity check: must be a single connected component
+            try:
+                frags = Chem.GetMolFrags(mol, asMols=False)
+                if isinstance(frags, tuple) and len(frags) > 1:
+                    return {'smiles': '', 'mol': None, 'valid': False}
+            except Exception:
+                return {'smiles': '', 'mol': None, 'valid': False}
         
         # Generate SMILES
         smiles = Chem.MolToSmiles(mol, canonical=True)
@@ -149,22 +169,123 @@ def logits_to_molecule(sampled_graphs, graph_idx=0, validity_check=True):
         }
 
 
-def batch_logits_to_molecules(sampled_graphs, validity_check=True):
-    """
-    Convert a batch of sampled graphs to molecules (MLX version)
-    
-    Args:
-        sampled_graphs: Output from decoder.sample_graph()
-        validity_check: Whether to perform RDKit validity checks
-        
-    Returns:
-        list: List of molecule dictionaries
-    """
-    batch_size = sampled_graphs['graph_sizes'].shape[0]
-    molecules = []
-    
-    for i in range(batch_size):
-        mol_dict = logits_to_molecule(sampled_graphs, graph_idx=i, validity_check=validity_check)
-        molecules.append(mol_dict)
-    
-    return molecules
+## Removed batch helper to keep script minimal
+
+def main():
+    parser = argparse.ArgumentParser(description='MLX-MGCVAE inference')
+    parser.add_argument('--num-samples', type=int, default=16,
+                        help='Number of molecules to sample')
+    parser.add_argument('--temperature', type=float, default=1.0,
+                        help='Sampling temperature (lower = more deterministic)')
+    parser.add_argument('--condition', action='store_true',
+                        help='Use property conditioning at inference')
+    parser.add_argument('--target', type=float, default=None,
+                        help='Target property value (required if --condition)')
+    # Minimal flags only
+
+    args = parser.parse_args()
+    checkpoint_path = os.path.join(PROJECT_ROOT, 'checkpoints', 'mlx_mgcvae', 'best_model.npz')
+    if not os.path.exists(checkpoint_path):
+        # Auto-discover best_model.npz anywhere under checkpoints/
+        candidates = []
+        checkpoints_root = os.path.join(PROJECT_ROOT, 'checkpoints')
+        for root, _, files in os.walk(checkpoints_root):
+            for fname in files:
+                if fname == 'best_model.npz':
+                    full = os.path.join(root, fname)
+                    try:
+                        mtime = os.path.getmtime(full)
+                    except Exception:
+                        mtime = 0
+                    candidates.append((mtime, full))
+        if candidates:
+            candidates.sort(reverse=True)
+            checkpoint_path = candidates[0][1]
+            print(f"Using discovered checkpoint: {checkpoint_path}")
+        else:
+            raise FileNotFoundError(f"Checkpoint not found under {checkpoints_root} (looked for best_model.npz)")
+
+    # Build model (mirror training defaults)
+    model = MLXMGCVAE(
+        node_dim=24,
+        edge_dim=6,
+        latent_dim=32,
+        hidden_dim=64,
+        num_properties=1,
+        num_layers=2,
+        heads=4,
+        max_nodes=20,
+        beta=1.0,
+        gamma=0.3,
+        dropout=0.1,
+        condition=args.condition,
+    )
+    model.load_weights(checkpoint_path)
+
+    # Sample latent z ~ N(0, I)
+    z = mx.random.normal(shape=(args.num_samples, model.latent_dim))
+    # Build properties tensor
+    if args.condition:
+        if args.target is None:
+            raise ValueError("--target is required when --condition is set")
+        target_props = mx.full((args.num_samples, model.num_properties), args.target)
+    else:
+        target_props = mx.zeros((args.num_samples, model.num_properties))
+    # Decode and discretize
+    decoder_out = model.decode(z, target_props)
+    sampled = model.decoder.sample_graph(decoder_out, temperature=args.temperature)
+
+    # Convert to molecules/SMILES (inline loop)
+    valid = 0
+    smiles_list = []
+    valid_mols = []
+    seen_signatures = set()
+    unique_attempts = 0
+    edge_threshold = 0.5
+    for i in range(args.num_samples):
+        # Build a discrete graph signature (size, node types, edges) to dedupe attempts
+        gsize = int(sampled['graph_sizes'][i].item())
+        node_probs_i = sampled['node_probs'][i]
+        node_types = []
+        for n in range(min(gsize, node_probs_i.shape[0])):
+            atom_type_probs = node_probs_i[n, :5]
+            node_types.append(int(mx.argmax(atom_type_probs).item()))
+        edges = []
+        edge_indices = sampled['edge_indices']
+        edge_exist_probs = sampled['edge_exist_probs'][i]
+        edge_type_probs = sampled['edge_type_probs'][i]
+        for e in range(edge_indices.shape[0]):
+            a = int(edge_indices[e, 0].item())
+            b = int(edge_indices[e, 1].item())
+            if a >= gsize or b >= gsize:
+                continue
+            if float(edge_exist_probs[e].item()) > edge_threshold:
+                bt = int(mx.argmax(edge_type_probs[e]).item())
+                ia, ib = (a, b) if a <= b else (b, a)
+                edges.append((ia, ib, bt))
+        signature = (gsize, tuple(node_types), tuple(edges))
+        if signature in seen_signatures:
+            continue
+        seen_signatures.add(signature)
+        unique_attempts += 1
+
+        # RDKit validity and SMILES
+        mol_dict = logits_to_molecule(sampled, graph_idx=i, validity_check=True)
+        if mol_dict.get('valid', False):
+            valid += 1
+            smiles_list.append(mol_dict['smiles'])
+            valid_mols.append(mol_dict['mol'])
+    print(f"Generated {valid}/{unique_attempts} valid unique molecules")
+    # Always save SMILES list to file
+    smiles_path = os.path.join(PROJECT_ROOT, 'generated_smiles.txt')
+    try:
+        with open(smiles_path, 'a') as f:
+            for smi in smiles_list:
+                f.write(smi + '\n')
+        print(f"Saved {len(smiles_list)} unique SMILES to {smiles_path}")
+    except Exception as e:
+        print(f"Failed to save SMILES: {e}")
+
+
+if __name__ == '__main__':
+    main()
