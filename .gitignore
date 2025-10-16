@@ -19,6 +19,8 @@ ENV/
 # Data / artifacts
 QM9/
 checkpoints/
+!checkpoints/**/best_model.npz
+!checkpoints/**/best_model_metadata.json
 logs/
 processed/
 *.pt
