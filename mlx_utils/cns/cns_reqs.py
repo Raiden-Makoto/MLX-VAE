@@ -8,33 +8,39 @@ def cns_validity(smiles: str) -> bool:
     if mol is None: return False
     # === Molecular Weight ===
     mw = Descriptors.ExactMolWt(mol)
-    print(f"Molecular weight: {mw}. CNS target: \u2264 400-450 Da")
+    print(f"Molecular weight: {mw:.4f}. CNS target: ≤ 450 Da")
     # === Lipophilicity ===
     logp = Descriptors.MolLogP(mol)
-    print(f"Lipophilicity: {logp}. CNS target: \u2248 2.0")
+    print(f"Lipophilicity: {logp:.4f}. CNS target: 2.0-5.0")
     # === Polar Surface Area ===
     tpsa = rdMolDescriptors.CalcTPSA(mol)
-    print(f"Polar Surface Area: {tpsa}. CNS target: \u2264 60-90 Å\u00B2")
+    print(f"Polar Surface Area: {tpsa:.4f}. CNS target: 40-90 Å²")
     # === Hydrogen Bond Donors ===
-    hbd = Lipinski.NumHBD(mol)
-    print(f"Hydrogen Bond Donors: {hbd}. CNS target: \u2264 1")
+    try:
+        hbd = Lipinski.NumHDonors(mol)  # Newer RDKit versions
+    except AttributeError:
+        hbd = Lipinski.NumHBD(mol)  # Older RDKit versions
+    print(f"Hydrogen Bond Donors: {hbd:.4f}. CNS target: ≤ 1")
     # === Hydrogen Bond Acceptors ===
-    hba = Lipinski.NumHBA(mol)
-    print(f"Hydrogen Bond Acceptors: {hba}. CNS target: 2-5 N/O atoms")
+    try:
+        hba = Lipinski.NumHAcceptors(mol)  # Newer RDKit versions
+    except AttributeError:
+        hba = Lipinski.NumHBA(mol)  # Older RDKit versions
+    print(f"Hydrogen Bond Acceptors: {hba:.4f}. CNS target: 2-5 N/O atoms")
     # === Rotatable Bonds ===
     rotatable_bonds = Lipinski.NumRotatableBonds(mol)
-    print(f"Rotatable Bonds: {rotatable_bonds}. CNS target: \u2264 10")
+    print(f"Rotatable Bonds: {rotatable_bonds:.4f}. CNS target: ≤ 10")
     # === Aromatic Rings ===
     aromatic_rings = Lipinski.NumAromaticRings(mol)
-    print(f"Aromatic Rings: {aromatic_rings}. CNS target: 2 to 3")
+    print(f"Aromatic Rings: {aromatic_rings:.4f}. CNS target: 2 to 3")
     cns_valid = all([
-        400 <= mw <= 450,
-        60 <= tpsa <= 90,
-        2 <= logp <= 5,
-        hbd <= 1,
-        2 <= hba <= 5,
-        rotatable_bonds <= 10,
-        2 <= aromatic_rings <= 3
+        mw <= 450,  # Molecular weight
+        40 <= tpsa <= 90,  # Polar surface area
+        2 <= logp <= 5,    # Lipophilicity
+        hbd <= 1,          # Hydrogen bond donors
+        2 <= hba <= 5,     # Hydrogen bond acceptors
+        rotatable_bonds <= 10,  # Rotatable bonds
+        2 <= aromatic_rings <= 3  # Aromatic rings
     ])
     return cns_valid
 
@@ -46,11 +52,22 @@ if __name__ == "__main__":
     with open(args.input_file, "r") as f:
         smiles_list = f.readlines()
     cns_valid_count = 0
+    total_checked = 0
     for smiles in smiles_list[:args.num_samples]:
-        smiles = smiles.strip() 
+        smiles = smiles.strip()
+        if not smiles:  # Skip empty lines
+            continue
         print(f"Checking: {smiles}")
-        print(f"CNS valid: {cns_validity(smiles)}")
-        cns_valid_count += 1 if cns_validity(smiles) else 0
+        is_valid = cns_validity(smiles)
+        print(f"CNS valid: {is_valid}")
+        if is_valid:
+            cns_valid_count += 1
+        total_checked += 1
         print("-"*70)
-    print(f"Percentage CNS valid: {cns_valid_count/args.num_samples*100}%")
+    
+    if total_checked > 0:
+        percentage = (cns_valid_count / total_checked) * 100
+        print(f"Percentage CNS valid: {percentage:.1f}% ({cns_valid_count}/{total_checked})")
+    else:
+        print("No valid SMILES found to check")
     print("="*70)
