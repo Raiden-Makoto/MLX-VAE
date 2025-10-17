@@ -467,21 +467,13 @@ if __name__ == '__main__':
                         help='Learning rate (default: 5e-4 for stable training)')
     parser.add_argument('--no-plot', action='store_true',
                         help='Disable training curve plots (useful for servers/headless environments)')
-    parser.add_argument('--data', type=str, default='',
-                        help='Data split: "1", "2", "3"; leave empty for full dataset; or custom CSV path')
     parser.add_argument('--condition', action='store_true',
                         help='Enable property conditioning (compute and include property loss)')
     
     args = parser.parse_args()
     
     # Determine data path
-    if args.data in ['1', '2', '3']:
-        data_path = f'mlx_data/qm9_mlx_part{args.data}.csv'
-    elif args.data in [None, '', 'all', 'full']:
-        data_path = 'mlx_data/qm9_mlx.csv'
-    else:
-        data_path = args.data
-    
+    data_path = 'mlx_data/qm9_cns.csv'
     print(f"Loading data from: {data_path}")
     
     # Load Dataset
@@ -491,9 +483,20 @@ if __name__ == '__main__':
         label_col="p_np"
     )
     
+    # Downsample to 1/5 of the dataset before splitting (random, reproducible)
+    total_graphs = len(dataset)
+    if total_graphs == 0:
+        raise RuntimeError("Loaded dataset is empty; cannot downsample")
+    # Use rounding so sizes like 31,014 → 6,203 (not 6,202)
+    downsample_size = max(1, int(round(total_graphs / 5)))
+    rng = np.random.default_rng(67)
+    sampled_indices = rng.choice(total_graphs, size=downsample_size, replace=False)
+    sampled_graphs = [dataset._graphs[i] for i in sampled_indices]
+    print(f"Downsampled dataset to {len(sampled_graphs)} graphs (1/5 of {total_graphs}).")
+
     # Split dataset
     train_graphs, other_graphs = train_test_split(
-        dataset._graphs, 
+        sampled_graphs, 
         test_size=0.2, 
         random_state=67
     )
