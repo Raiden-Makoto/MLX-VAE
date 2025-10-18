@@ -258,14 +258,20 @@ class MLXMGCVAE(nn.Module):
             property_loss = mx.array(0.0)
         
         # =====================================================================
+        # Valence Constraint Loss
+        # =====================================================================
+        # Penalize molecules that violate chemical valence rules
+        valence_loss = self._compute_valence_constraint_loss(decoder_out, batch_size)
+        
+        # =====================================================================
         # Combined Loss
         # =====================================================================
         if self.condition:
-            # Total Loss = Reconstruction + Property + γ⋅|KL - C_t|
-            total_loss = total_recon_loss + property_loss + self.gamma * kl_loss
+            # Total Loss = Reconstruction + Property + γ⋅|KL - C_t| + Valence
+            total_loss = total_recon_loss + property_loss + self.gamma * kl_loss + 0.1 * valence_loss
         else:
-            # Total Loss = Reconstruction + γ⋅|KL - C_t|
-            total_loss = total_recon_loss + self.gamma * kl_loss
+            # Total Loss = Reconstruction + γ⋅|KL - C_t| + Valence
+            total_loss = total_recon_loss + self.gamma * kl_loss + 0.1 * valence_loss
         
         return {
             'total_loss': total_loss,
@@ -274,6 +280,7 @@ class MLXMGCVAE(nn.Module):
             'edge_recon_loss': edge_recon_loss,
             'kl_loss': kl_loss,
             'kl_divergence': kl_divergence,  # Actual KL value (for monitoring)
+            'valence_loss': valence_loss,    # Valence constraint loss
             # 'kl_per_graph': kl_per_graph,  # For monitoring (commented out - causes .item() conversion errors)
             # 'kl_target': C_t,              # For monitoring (commented out - causes .item() conversion errors)
             'property_loss': property_loss
@@ -443,6 +450,53 @@ class MLXMGCVAE(nn.Module):
             edge_type_loss = mx.array(0.0)
         
         return edge_exist_loss + edge_type_loss
+    
+    def _compute_valence_constraint_loss(self, decoder_output, batch_size):
+        """
+        Compute valence constraint loss to penalize chemically invalid molecules.
+        
+        This loss encourages the model to generate molecules that respect
+        chemical valence rules (H:1, C:4, N:3, O:2, F:1 bonds).
+        """
+        node_logits = decoder_output['node_logits']  # [batch_size, max_nodes, node_dim]
+        edge_logits = decoder_output['edge_logits']  # [batch_size, num_edges, edge_dim+1]
+        edge_indices = decoder_output['edge_indices']  # [num_edges, 2]
+        
+        # Get atom type probabilities (first 5 dimensions)
+        atom_type_probs = mx.softmax(node_logits[:, :, :5], axis=-1)  # [batch_size, max_nodes, 5]
+        
+        # Get edge existence probabilities
+        edge_exist_probs = mx.sigmoid(edge_logits[:, :, -1])  # [batch_size, num_edges]
+        
+        # Define maximum valence for each atom type
+        max_valence = mx.array([1, 4, 3, 2, 1], dtype=mx.float32)  # H, C, N, O, F
+        
+        valence_loss = mx.array(0.0)
+        
+        for b in range(batch_size):
+            # Compute expected bonds per atom
+            expected_bonds = mx.zeros(self.max_nodes)
+            
+            for edge_idx in range(edge_indices.shape[0]):
+                i = int(edge_indices[edge_idx, 0].item())
+                j = int(edge_indices[edge_idx, 1].item())
+                
+                if i < self.max_nodes and j < self.max_nodes:
+                    edge_prob = edge_exist_probs[b, edge_idx]
+                    expected_bonds[i] += edge_prob
+                    expected_bonds[j] += edge_prob
+            
+            # Compute expected valence violation penalty
+            for atom_idx in range(self.max_nodes):
+                atom_probs = atom_type_probs[b, atom_idx]  # [5]
+                expected_valence = mx.sum(atom_probs * max_valence)
+                actual_bonds = expected_bonds[atom_idx]
+                
+                # Penalty for exceeding expected valence
+                violation = mx.maximum(actual_bonds - expected_valence, 0.0)
+                valence_loss += violation ** 2
+        
+        return valence_loss / batch_size
     
     def generate(self, target_properties, num_samples=1, temperature=1.0):
         """

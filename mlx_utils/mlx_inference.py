@@ -63,7 +63,8 @@ def logits_to_molecule(sampled_graphs, graph_idx=0, validity_check=True):
     for i in range(min(graph_size, node_probs.shape[0])):
         # Get atom type probabilities (first 5 dimensions for atom types)
         atom_type_probs = node_probs[i, :len(atom_types)]
-        atom_type_idx = int(mx.argmax(atom_type_probs).item())
+        # Use probabilistic sampling instead of argmax to allow diversity
+        atom_type_idx = int(mx.random.categorical(atom_type_probs, num_samples=1).item())
         atomic_num = atom_types[atom_type_idx]
         atoms.append(atomic_num)
     
@@ -249,7 +250,8 @@ def main():
         node_types = []
         for n in range(min(gsize, node_probs_i.shape[0])):
             atom_type_probs = node_probs_i[n, :5]
-            node_types.append(int(mx.argmax(atom_type_probs).item()))
+            # Use probabilistic sampling instead of argmax
+            node_types.append(int(mx.random.categorical(atom_type_probs, num_samples=1).item()))
         edges = []
         edge_indices = sampled['edge_indices']
         edge_exist_probs = sampled['edge_exist_probs'][i]
