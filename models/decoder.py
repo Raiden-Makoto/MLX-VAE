@@ -1,6 +1,6 @@
 import mlx.core as mx
 import mlx.nn as nn
-from custom_lstm import CustomLSTM
+from models.custom_lstm import CustomLSTM
 
 class SelfiesDecoder(nn.Module):
     def __init__(
