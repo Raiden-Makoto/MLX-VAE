@@ -18,8 +18,8 @@ class SelfiesDecoder(nn.Module):
         self.fc = nn.Linear(hidden_dim, vocab_size)
 
     def __call__(self, z, seq):
-        #z: [B, L]
-        #seq: [B, T]
+        #z: [B, L] - latent code
+        #seq: [B, T] - input sequence
         init_h = mx.tanh(self.latent_h(z))  # [B, H]
         init_c = mx.tanh(self.latent_c(z))  # [B, H]
         x = self.embed(seq)  # [B, T, E]

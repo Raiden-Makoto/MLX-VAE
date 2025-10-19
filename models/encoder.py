@@ -23,12 +23,12 @@ class SelfiesEncoder(nn.Module):
         
         # Forward LSTM
         _, h_forward = self.lstm_forward(x) # Returns (output, hidden_state)
-        h_forward = h_forward[0] # [B, H] - take the hidden state from the last layer
+        h_forward = h_forward[:, -1, :] # [B, H] - take the last timestep
         
         # Backward LSTM (reverse the sequence)
         x_reversed = x[:, ::-1] # Reverse along sequence dimension using slicing
         _, h_backward = self.lstm_backward(x_reversed) # Returns (output, hidden_state)
-        h_backward = h_backward[0] # [B, H] - take the hidden state from the last layer
+        h_backward = h_backward[:, -1, :] # [B, H] - take the last timestep
         
         # Concatenate forward and backward hidden states
         h = mx.concatenate([h_forward, h_backward], axis=-1) # [B, 2*H]
