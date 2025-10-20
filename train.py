@@ -24,6 +24,7 @@ parser.add_argument('--save_every', type=int, default=5, help='Save model every 
 parser.add_argument('--output_dir', type=str, default='checkpoints', help='Directory to save checkpoints')
 parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs to warm up beta from 0 to 1')
 parser.add_argument('--max_beta', type=float, default=0.1, help='Maximum beta value')
+parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 
 # Load data and metadata
@@ -86,10 +87,10 @@ best_loss = float('inf')
 best_model_path = os.path.join(args.output_dir, 'best_model.npz')
 
 # Training function
-def train_step(model, batch, optimizer, beta):
+def train_step(model, batch, optimizer, beta, noise_std=0.05):
     """Single training step"""
     def loss_fn(model):
-        logits, mu, logvar, target_seq = model(batch)
+        logits, mu, logvar = model(batch, training=True, noise_std=noise_std)
         return compute_loss(batch, logits, mu, logvar, beta)
     
     # Compute loss and gradients
@@ -134,6 +135,7 @@ else:
     print(f"Training model for {total_epochs} epochs")
 print(f"Batch size: {args.batch_size}, Learning rate: {args.learning_rate}")
 print(f"Beta warmup: {args.beta_warmup_epochs} epochs, Max beta: {args.max_beta}")
+print(f"Latent noise std: {args.latent_noise_std}")
 print(f"Total batches per epoch: {len(batches)}")
 print("="*67)
 
@@ -155,7 +157,7 @@ for epoch in range(start_epoch, total_epochs):
     
     for batch_idx, batch in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss = train_step(model, batch, optimizer, current_beta)
+        total_loss, recon_loss, kl_loss = train_step(model, batch, optimizer, current_beta, args.latent_noise_std)
         
         # Store losses
         epoch_losses.append(total_loss)

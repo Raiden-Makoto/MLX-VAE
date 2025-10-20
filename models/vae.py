@@ -24,7 +24,7 @@ class SelfiesVAE(nn.Module):
         eps = mx.random.normal(mu.shape)
         return mu + std * eps
 
-    def __call__(self, x):
+    def __call__(self, x, training=True, noise_std=0.05):
         #x: [B, T]
         input_seq = x[:, :-1]
         target_seq = x[:, 1:]  # Shift for next token prediction
@@ -33,7 +33,12 @@ class SelfiesVAE(nn.Module):
         mu, logvar = self.E(input_seq)
         z = self.reparameterize(mu, logvar)
         
+        # Add Gaussian noise during training for decoder robustness
+        if training and noise_std > 0:
+            noise = mx.random.normal(z.shape) * noise_std
+            z = z + noise
+        
         # Decode from latent space
         logits = self.D(z, input_seq)
         
-        return logits, mu, logvar, target_seq
+        return logits, mu, logvar

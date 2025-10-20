@@ -1,6 +1,6 @@
 # Conditional SELFIES-Based Variational Autoencoder
 
-A PyTorch-style implementation of a Variational Autoencoder (VAE) for molecular generation using SELFIES representation, built with Apple's MLX framework for efficient training on Apple Silicon.
+An implementation of a Variational Autoencoder (VAE) for molecular generation using SELFIES representation, built with Apple's MLX framework for efficient training on Apple Silicon.
 
 ## 🧬 Overview
 
