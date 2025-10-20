@@ -1,5 +1,0 @@
-[#C][=O][N][O][#N][#C][#N][=Ring1][Branch1][=N][O][#Branch1]
-[=Branch2]
-[=N][=N][O][#N][NH1]
-[Ring2][Ring2][Branch1][N][Branch2][=Branch2][F][=Branch2][NH1][#N][C][=C][#Branch1][Branch1][Ring2][NH1][#C]
-[NH1][#N][Ring1][NH1][N]

@@ -69,13 +69,13 @@ def create_molecule_grid(df, max_molecules=20, figsize=(15, 10)):
                    ha='center', va='top', fontsize=8,
                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
             
-            ax.set_title(f"Molecule {i+1}", fontsize=10)
+            ax.set_title("", fontsize=10)
             
         except Exception as e:
-            print(f"Error visualizing molecule {i+1}: {str(e)[:50]}...")
+            print(f"Error visualizing molecule: {str(e)[:50]}...")
             ax.text(0.5, 0.5, f"Error:\n{str(e)[:20]}", ha='center', va='center',
                    transform=ax.transAxes, fontsize=10, color='red')
-            ax.set_title(f"Molecule {i+1}", fontsize=10)
+            ax.set_title("", fontsize=10)
         
         # Remove axes
         ax.set_xticks([])
