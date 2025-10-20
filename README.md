@@ -32,9 +32,22 @@ This project implements a VAE that learns to generate novel molecular structures
 Input SELFIES → Bidirectional LSTM Encoder → Latent Space (μ, σ) → Custom LSTM Decoder → Generated SELFIES
 ```
 
+### Mathematical Formulation
+
+The VAE learns to model the molecular distribution $p(x)$ by maximizing the Evidence Lower Bound (ELBO):
+
+$$\mathcal{L}(\theta, \phi) = \mathbb{E}_{q_\phi(z|x)}[\log p_\theta(x|z)] - \beta \cdot D_{KL}(q_\phi(z|x) || p(z))$$
+
+Where:
+- $q_\phi(z|x)$: Encoder (approximate posterior)
+- $p_\theta(x|z)$: Decoder (likelihood)
+- $p(z) = \mathcal{N}(0, I)$: Prior distribution
+- $\beta$: KL annealing weight
+
 ### Components
 
-- **Encoder**: Bidirectional LSTM + LayerNorm → μ, logσ layers
-- **Decoder**: Custom LSTM with latent initialization + LayerNorm → Vocabulary projection
-- **Loss**: Reconstruction (Cross-entropy) + β × KL Divergence
-- **Sampling**: Top-K filtering with temperature control
+- **Encoder**: $h = \text{BidirectionalLSTM}(x) \rightarrow \mu, \log\sigma = \text{Linear}(\text{LayerNorm}(h))$
+- **Reparameterization**: $z = \mu + \sigma \odot \epsilon, \epsilon \sim \mathcal{N}(0, I)$
+- **Decoder**: $\hat{x} = \text{CustomLSTM}(z, x) \rightarrow \text{VocabProjection}(\text{LayerNorm}(\hat{x}))$
+- **Loss**: $\mathcal{L} = \text{CrossEntropy}(x, \hat{x}) + \beta \cdot D_{KL}(q_\phi(z|x) || \mathcal{N}(0, I))$
+- **Sampling**: Top-K filtering with temperature scaling
