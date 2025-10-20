@@ -140,7 +140,7 @@ if __name__ == "__main__":
     parser.add_argument('--temperature', type=float, default=1.0, help='Sampling temperature')
     parser.add_argument('--top_k', type=int, default=10, help='Top-k sampling threshold (keep top k most likely tokens)')
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints', help='Directory containing best_model.npz')
-    parser.add_argument('--output_file', type=str, default='generated_molecules.txt', help='Output file for generated SELFIES')
+    parser.add_argument('--output_file', type=str, default='output/generated_molecules.txt', help='Output file for generated SELFIES')
     
     args = parser.parse_args()
     

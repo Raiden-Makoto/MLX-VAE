@@ -1,6 +1,7 @@
 from rdkit import Chem
 from rdkit.Chem import Descriptors
 import selfies as sf
+import pandas as pd
 
 import os
 
@@ -10,8 +11,12 @@ def validate_selfies(selfies_str):
         smiles = sf.decoder(selfies_str)
         mol = Chem.MolFromSmiles(smiles)
         if mol is None: return None
+        
+        # Get canonical SMILES to avoid duplicates
+        canonical_smiles = Chem.MolToSmiles(mol, canonical=True)
+        
         return {
-            'smiles': smiles,
+            'smiles': canonical_smiles,
             'logp': Descriptors.MolLogP(mol),
             'tpsa': Descriptors.TPSA(mol),
             'mw' : Descriptors.ExactMolWt(mol),
@@ -22,16 +27,40 @@ def validate_selfies(selfies_str):
 
 def batch_validate_selfies(selfies_list):
     results = []
+    seen_smiles = set()  # Track unique SMILES
+    
     for selfies in selfies_list:
         result = validate_selfies(selfies)
         if result is not None:
-            results.append(result)
+            # Only add if we haven't seen this canonical SMILES before
+            if result['smiles'] not in seen_smiles:
+                results.append(result)
+                seen_smiles.add(result['smiles'])
+    
     return results
 
 if __name__ == "__main__":
-    with open('generated_molecules.txt', 'r') as f:
+    with open('output/generated_molecules.txt', 'r') as f:
         selfies_list = [line.strip() for line in f.readlines()]
+    
     results = batch_validate_selfies(selfies_list)
-    print(f"Valid molecules: {len(results)}/{len(selfies_list)}, {len(results)/len(selfies_list)*100:.2f}% success rate")
+    
+    # Count duplicates by checking how many valid molecules we had before deduplication
+    valid_count = 0
+    for selfies in selfies_list:
+        if validate_selfies(selfies) is not None:
+            valid_count += 1
+    
+    print(f"Valid molecules: {len(results)}/{valid_count} unique, {len(results)/valid_count*100:.2f}% success rate")
+    
+    # Print results
     for i, data in enumerate(results):
         print(f"Mol {i+1}: {data['smiles']}. LogP: {data['logp']:.2f}, TPSA: {data['tpsa']:.2f}, MW: {data['mw']:.2f}")
+    
+    # Save to CSV
+    if results:
+        df = pd.DataFrame(results)
+        csv_path = 'output/validation_results.csv'
+        df.to_csv(csv_path, index=False)
+        print(f"\n💾 Saved validation results to {csv_path}")
+        print(f"📊 CSV contains {len(df)} valid molecules with columns: {list(df.columns)}")
