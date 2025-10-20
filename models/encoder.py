@@ -14,6 +14,9 @@ class SelfiesEncoder(nn.Module):
         # Bidirectional LSTM using two separate LSTMs
         self.lstm_forward = nn.LSTM(embedding_dim, hidden_dim)
         self.lstm_backward = nn.LSTM(embedding_dim, hidden_dim)
+        
+        # Initialize mu and logvar layers with layer normalization
+        self.layer_norm = nn.LayerNorm(2 * hidden_dim)
         self.mu = nn.Linear(2 * hidden_dim, latent_dim)
         self.logvar = nn.Linear(2 * hidden_dim, latent_dim)
 
@@ -33,6 +36,13 @@ class SelfiesEncoder(nn.Module):
         # Concatenate forward and backward hidden states
         h = mx.concatenate([h_forward, h_backward], axis=-1) # [B, 2*H]
         
+        # Apply layer normalization to stabilize training
+        h = self.layer_norm(h)  # Normalize to mean=0, std=1
+        
         mu = self.mu(h) # [B, L]
         logvar = self.logvar(h) # [B, L]
+        
+        # Clamp logvar to prevent extreme values
+        logvar = mx.clip(logvar, -10.0, 2.0)
+        
         return mu, logvar

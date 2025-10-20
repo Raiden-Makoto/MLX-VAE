@@ -30,8 +30,7 @@ def compute_loss(x, logits, mu, logvar, beta: float=1.0):
     target = x[:, 1:]  # Shift for next token prediction
     
     # Reconstruction loss (cross-entropy)
-    max_logits = mx.max(logits, axis=-1, keepdims=True)
-    log_probs = logits - max_logits - mx.log(mx.sum(mx.exp(logits - max_logits), axis=-1, keepdims=True))
+    log_probs = mx.log(mx.softmax(logits, axis=-1))
     recon_loss = -mx.mean(mx.take_along_axis(log_probs, mx.expand_dims(target, axis=-1), axis=-1))
     
     # Apply padding mask
@@ -39,8 +38,10 @@ def compute_loss(x, logits, mu, logvar, beta: float=1.0):
     recon_loss = recon_loss * mx.mean(mask.astype(mx.float32))
     
     # KL divergence loss
-    kl_loss = -0.5 * mx.sum(1 + logvar - mx.square(mu) - mx.exp(logvar), axis=1)
-    kl_loss = mx.mean(kl_loss)
+    kl_loss = -0.5 * mx.mean(1 + logvar - mx.square(mu) - mx.exp(logvar))
+    
+    # Clip KL loss to prevent numerical instability (reasonable range)
+    kl_loss = mx.clip(kl_loss, -10.0, 10.0)
     
     # Total loss
     total_loss = recon_loss + beta * kl_loss

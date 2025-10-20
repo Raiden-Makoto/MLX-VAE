@@ -2,10 +2,10 @@ import mlx.core as mx
 import json
 import numpy as np
 
-with open('qm9_cns_selfies.json', 'r') as f:
+with open('mlx_data/qm9_cns_selfies.json', 'r') as f:
     meta = json.load(f)
 
-tokenized = np.load('qm9_cns_tokenized.npy')
+tokenized = np.load('mlx_data/qm9_cns_tokenized.npy')
 token_to_idx = meta['token_to_idx']
 idx_to_token = meta['idx_to_token']
 vocab_size = meta['vocab_size']

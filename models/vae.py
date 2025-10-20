@@ -15,6 +15,7 @@ class SelfiesVAE(nn.Module):
         super().__init__()
         self.E = SelfiesEncoder(vocab_size, embedding_dim, hidden_dim, latent_dim)
         self.D = SelfiesDecoder(vocab_size, embedding_dim, hidden_dim, latent_dim)
+        self.latent_dim = latent_dim
 
     def reparameterize(self, mu, logvar):
         #mu: [B, L]
