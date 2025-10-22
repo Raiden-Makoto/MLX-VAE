@@ -1,9 +1,10 @@
 from rdkit import Chem
-from rdkit.Chem import Descriptors
+from rdkit.Chem import Descriptors, QED
 import selfies as sf
 import pandas as pd
 
-import os
+from utils.smarts import preliminary_filter
+from utils.sascorer import calculateScore
 
 def validate_selfies(selfies_str):
     if not selfies_str: return None
@@ -19,7 +20,9 @@ def validate_selfies(selfies_str):
             'smiles': canonical_smiles,
             'logp': Descriptors.MolLogP(mol),
             'tpsa': Descriptors.TPSA(mol),
-            'mw' : Descriptors.ExactMolWt(mol),
+            'mw': Descriptors.ExactMolWt(mol),
+            'sas': calculateScore(mol),
+            'qed': QED.qed(mol)
         }
     except Exception as e:
         print(f"Error decoding SELFIES '{selfies_str}': {e}")
@@ -51,7 +54,7 @@ if __name__ == "__main__":
     
     # Print results
     for i, data in enumerate(results):
-        print(f"Mol {i+1}: {data['smiles']}. LogP: {data['logp']:.2f}, TPSA: {data['tpsa']:.2f}, MW: {data['mw']:.2f}")
+        print(f"Mol {i+1}: {data['smiles']}. LogP: {data['logp']:.2f}, TPSA: {data['tpsa']:.2f}, MW: {data['mw']:.2f}, SAS: {data['sas']:.2f}, Heavy: {data['heavy_atoms']}, RotBonds: {data['rotatable_bonds']}, Rings: {data['ring_count']}")
     
     # Save to CSV
     if results:
