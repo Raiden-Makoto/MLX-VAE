@@ -24,7 +24,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from models.vae import SelfiesVAE
 from utils.sample import sample_from_vae, tokens_to_selfies, load_best_model
 from utils.validate import validate_selfies, batch_validate_selfies
-from utils.visualize import create_molecule_grid
+from utils.visualize import create_molecule_grid, create_property_distributions
 
 def load_data():
     """Load vocabulary and metadata"""
@@ -88,6 +88,17 @@ def visualize_molecules(df, max_molecules=20):
         print("💾 Saved molecule grid to output/molecule_grid.png")
     else:
         print("❌ Could not create molecule grid visualization")
+
+    # Create property distributions
+    try:
+        prop_fig = create_property_distributions(df)
+        if prop_fig is not None:
+            prop_fig.savefig('output/property_distributions.png', dpi=300, bbox_inches='tight')
+            print("💾 Saved property distributions to output/property_distributions.png")
+        else:
+            print("❌ Could not create property distributions visualization")
+    except Exception as e:
+        print(f"❌ Error creating property distributions: {e}")
 
 def save_results(df, output_file='output/generation_results.csv'):
     """Save validation results to CSV"""
