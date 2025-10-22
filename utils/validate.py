@@ -45,13 +45,9 @@ if __name__ == "__main__":
     
     results = batch_validate_selfies(selfies_list)
     
-    # Count duplicates by checking how many valid molecules we had before deduplication
-    valid_count = 0
-    for selfies in selfies_list:
-        if validate_selfies(selfies) is not None:
-            valid_count += 1
-    
-    print(f"Valid molecules: {len(results)}/{valid_count} unique, {len(results)/valid_count*100:.2f}% success rate")
+    print(f"Total generated: {len(selfies_list)}")
+    print(f"Unique valid molecules: {len(results)}")
+    print(f"Success rate: {len(results)/len(selfies_list)*100:.2f}% (unique/total)")
     
     # Print results
     for i, data in enumerate(results):

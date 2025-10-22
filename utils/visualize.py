@@ -17,7 +17,7 @@ def load_molecules_from_csv(csv_path='output/validation_results.csv'):
     df = pd.read_csv(csv_path)
     return df
 
-def create_molecule_grid(df, max_molecules=20, figsize=(15, 10)):
+def create_molecule_grid(df, max_molecules=50, figsize=(20, 15)):
     """Create a grid visualization of molecules with properties as captions"""
     
     # Try to get working molecules, skip errors
@@ -41,7 +41,7 @@ def create_molecule_grid(df, max_molecules=20, figsize=(15, 10)):
         return None
     
     # Calculate grid dimensions
-    cols = 5
+    cols = 10  # More columns for bigger grid
     rows = (n_molecules + cols - 1) // cols
     
     # Create figure
@@ -145,7 +145,7 @@ if __name__ == "__main__":
     
     # Create molecule grid visualization
     print("🎨 Creating molecule grid visualization...")
-    fig1 = create_molecule_grid(df, max_molecules=20)
+    fig1 = create_molecule_grid(df, max_molecules=50)
     if fig1 is not None:
         fig1.savefig('output/molecule_grid.png', dpi=300, bbox_inches='tight')
         print("💾 Saved molecule grid to output/molecule_grid.png")

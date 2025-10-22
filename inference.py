@@ -72,7 +72,7 @@ def validate_molecules(selfies_list):
     print(f"   Total generated: {total_generated}")
     print(f"   Valid molecules: {total_valid}")
     print(f"   Unique valid: {unique_valid}")
-    print(f"   Success rate: {unique_valid/total_valid:.1%}")
+    print(f"   Success rate: {unique_valid/total_generated:.1%}")
     
     return df
 
@@ -102,7 +102,7 @@ def main():
                        help='Sampling temperature')
     parser.add_argument('--top_k', type=int, default=10,
                        help='Top-k sampling threshold')
-    parser.add_argument('--max_visualize', type=int, default=20,
+    parser.add_argument('--max_visualize', type=int, default=50,
                        help='Maximum number of molecules to visualize')
     parser.add_argument('--output_file', type=str, default='output/generation_results.csv',
                        help='Output CSV file for results')
