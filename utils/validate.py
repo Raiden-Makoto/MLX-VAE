@@ -40,7 +40,14 @@ def batch_validate_selfies(selfies_list):
                 results.append(result)
                 seen_smiles.add(result['smiles'])
     
-    return results
+    # Apply preliminary filtering to remove unstable molecules
+    smiles_list = [result['smiles'] for result in results]
+    filtered_smiles = preliminary_filter(smiles_list)
+    
+    # Filter results to only include molecules that passed the preliminary filter
+    filtered_results = [result for result in results if result['smiles'] in filtered_smiles]
+    
+    return filtered_results
 
 if __name__ == "__main__":
     with open('output/generated_molecules.txt', 'r') as f:
@@ -54,7 +61,7 @@ if __name__ == "__main__":
     
     # Print results
     for i, data in enumerate(results):
-        print(f"Mol {i+1}: {data['smiles']}. LogP: {data['logp']:.2f}, TPSA: {data['tpsa']:.2f}, MW: {data['mw']:.2f}, SAS: {data['sas']:.2f}, Heavy: {data['heavy_atoms']}, RotBonds: {data['rotatable_bonds']}, Rings: {data['ring_count']}")
+        print(f"Mol {i+1}: {data['smiles']}. LogP: {data['logp']:.2f}, TPSA: {data['tpsa']:.2f}, MW: {data['mw']:.2f}, SAS: {data['sas']:.2f}, QED: {data['qed']:.2f}")
     
     # Save to CSV
     if results:

@@ -53,7 +53,7 @@ def validate_molecules(selfies_list):
     """Validate generated molecules and convert to SMILES"""
     print(f"🔍 Validating {len(selfies_list)} molecules...")
     
-    # Validate and convert to SMILES
+    # Validate and convert to SMILES (includes filtering)
     results = batch_validate_selfies(selfies_list)
     
     if not results:
@@ -73,6 +73,7 @@ def validate_molecules(selfies_list):
     print(f"   Valid molecules: {total_valid}")
     print(f"   Unique valid: {unique_valid}")
     print(f"   Success rate: {unique_valid/total_generated:.1%}")
+    print(f"   🔬 Applied chemical stability filtering (peroxides, small rings, etc.)")
     
     return df
 
@@ -96,8 +97,8 @@ def save_results(df, output_file='output/generation_results.csv'):
 
 def main():
     parser = argparse.ArgumentParser(description='Generate and analyze molecules with VAE')
-    parser.add_argument('--num_samples', type=int, default=50, 
-                       help='Number of molecules to generate')
+    parser.add_argument('--num_samples', type=int, default=128, 
+                       help='Number of molecules to generate (default 128)')
     parser.add_argument('--temperature', type=float, default=1.0,
                        help='Sampling temperature')
     parser.add_argument('--top_k', type=int, default=10,
