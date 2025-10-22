@@ -5,26 +5,30 @@ Combines sampling, validation, and visualization into one script.
 """
 
 import argparse
+import io
+import json
 import os
 import sys
-import json
-import pandas as pd
+
+from PIL import Image
 import matplotlib
-matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
+import numpy as np
+import pandas as pd
 from rdkit import Chem
 from rdkit.Chem import Draw
-import numpy as np
-from PIL import Image
-import io
+
+from models.vae import SelfiesVAE
+from utils.sample import load_best_model, sample_from_vae, tokens_to_selfies
+from utils.validate import batch_validate_selfies, validate_selfies
+from utils.visualize import create_molecule_grid, create_property_distributions
+matplotlib.use('Agg')  # Use non-interactive backend
+
 
 # Add project root to path
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from models.vae import SelfiesVAE
-from utils.sample import sample_from_vae, tokens_to_selfies, load_best_model
-from utils.validate import validate_selfies, batch_validate_selfies
-from utils.visualize import create_molecule_grid, create_property_distributions
+
 
 def load_data():
     """Load vocabulary and metadata"""
@@ -67,13 +71,6 @@ def validate_molecules(selfies_list):
     total_generated = len(selfies_list)
     total_valid = len(results)
     unique_valid = len(df['smiles'].unique())
-    
-    print(f"📊 Validation Results:")
-    print(f"   Total generated: {total_generated}")
-    print(f"   Valid molecules: {total_valid}")
-    print(f"   Unique valid: {unique_valid}")
-    print(f"   Success rate: {unique_valid/total_generated:.1%}")
-    print(f"   🔬 Applied chemical stability filtering (peroxides, small rings, etc.)")
     
     return df
 

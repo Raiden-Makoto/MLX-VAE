@@ -5,6 +5,7 @@ import pandas as pd
 
 from utils.smarts import preliminary_filter
 from utils.sascorer import calculateScore
+from utils.geomopt import strain_filter
 
 def validate_selfies(selfies_str):
     if not selfies_str: return None
@@ -40,14 +41,20 @@ def batch_validate_selfies(selfies_list):
                 results.append(result)
                 seen_smiles.add(result['smiles'])
     
+    if not results:
+        return results
+    
     # Apply preliminary filtering to remove unstable molecules
+    print(f"🔬 Applying preliminary filtering to remove unstable molecules...")
     smiles_list = [result['smiles'] for result in results]
     filtered_smiles = preliminary_filter(smiles_list)
     
-    # Filter results to only include molecules that passed the preliminary filter
-    filtered_results = [result for result in results if result['smiles'] in filtered_smiles]
+    print(f"🔬 Applying strain filtering to remove molecules with high strain...")
+    filtered_smiles = strain_filter(filtered_smiles)
     
-    return filtered_results
+    # Create set for O(1) lookup and filter results in one pass
+    filtered_smiles_set = set(filtered_smiles)
+    return [result for result in results if result['smiles'] in filtered_smiles_set]
 
 if __name__ == "__main__":
     with open('output/generated_molecules.txt', 'r') as f:
@@ -55,8 +62,7 @@ if __name__ == "__main__":
     
     results = batch_validate_selfies(selfies_list)
     
-    print(f"Total generated: {len(selfies_list)}")
-    print(f"Unique valid molecules: {len(results)}")
+    print(f"Total unique valid, stable, low strain molecules: {len(results)}")
     print(f"Success rate: {len(results)/len(selfies_list)*100:.2f}% (unique/total)")
     
     # Print results
