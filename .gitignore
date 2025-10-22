@@ -26,6 +26,9 @@ processed/
 *.pt
 *.pth
 
+# Large data files
+utils/fpscores.pkl.gz
+
 # Python packaging
 *.egg-info/
 .dist/
