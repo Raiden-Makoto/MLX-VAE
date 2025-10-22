@@ -64,7 +64,7 @@ def create_molecule_grid(df, max_molecules=50, figsize=(20, 15)):
             ax.imshow(img)
             
             # Create caption with properties
-            caption = f"LogP: {row['logp']:.2f}\nTPSA: {row['tpsa']:.1f}\nMW: {row['mw']:.1f}"
+            caption = f"LogP: {row['logp']:.2f}\nTPSA: {row['tpsa']:.1f}\nMW: {row['mw']:.1f}\nQED: {row['qed']:.2f}\nSAS: {row['sas']:.2f}"
             ax.text(0.5, -0.1, caption, transform=ax.transAxes, 
                    ha='center', va='top', fontsize=8,
                    bbox=dict(boxstyle='round', facecolor='white', alpha=0.8))
@@ -97,7 +97,7 @@ def create_molecule_grid(df, max_molecules=50, figsize=(20, 15)):
 
 def create_property_distributions(df):
     """Create distribution plots for molecular properties"""
-    fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+    fig, axes = plt.subplots(2, 3, figsize=(18, 8))
     
     # LogP distribution
     axes[0, 0].hist(df['logp'], bins=20, alpha=0.7, color='blue', edgecolor='black')
@@ -118,21 +118,39 @@ def create_property_distributions(df):
     axes[0, 1].legend()
     
     # MW distribution
-    axes[1, 0].hist(df['mw'], bins=20, alpha=0.7, color='orange', edgecolor='black')
-    axes[1, 0].set_title('Molecular Weight Distribution')
-    axes[1, 0].set_xlabel('MW (Da)')
-    axes[1, 0].set_ylabel('Count')
-    axes[1, 0].axvline(df['mw'].mean(), color='red', linestyle='--',
+    axes[0, 2].hist(df['mw'], bins=20, alpha=0.7, color='orange', edgecolor='black')
+    axes[0, 2].set_title('Molecular Weight Distribution')
+    axes[0, 2].set_xlabel('MW (Da)')
+    axes[0, 2].set_ylabel('Count')
+    axes[0, 2].axvline(df['mw'].mean(), color='red', linestyle='--',
                       label=f'Mean: {df["mw"].mean():.1f}')
+    axes[0, 2].legend()
+    
+    # QED distribution
+    axes[1, 0].hist(df['qed'], bins=20, alpha=0.7, color='purple', edgecolor='black')
+    axes[1, 0].set_title('QED Distribution')
+    axes[1, 0].set_xlabel('QED')
+    axes[1, 0].set_ylabel('Count')
+    axes[1, 0].axvline(df['qed'].mean(), color='red', linestyle='--',
+                      label=f'Mean: {df["qed"].mean():.2f}')
     axes[1, 0].legend()
     
-    # LogP vs TPSA scatter
-    scatter = axes[1, 1].scatter(df['logp'], df['tpsa'], c=df['mw'], 
+    # SAS distribution
+    axes[1, 1].hist(df['sas'], bins=20, alpha=0.7, color='red', edgecolor='black')
+    axes[1, 1].set_title('SAS Distribution')
+    axes[1, 1].set_xlabel('SAS')
+    axes[1, 1].set_ylabel('Count')
+    axes[1, 1].axvline(df['sas'].mean(), color='red', linestyle='--',
+                      label=f'Mean: {df["sas"].mean():.2f}')
+    axes[1, 1].legend()
+    
+    # QED vs SAS scatter
+    scatter = axes[1, 2].scatter(df['qed'], df['sas'], c=df['logp'], 
                                 cmap='viridis', alpha=0.7, s=50)
-    axes[1, 1].set_title('LogP vs TPSA (colored by MW)')
-    axes[1, 1].set_xlabel('LogP')
-    axes[1, 1].set_ylabel('TPSA')
-    plt.colorbar(scatter, ax=axes[1, 1], label='MW (Da)')
+    axes[1, 2].set_title('QED vs SAS (colored by LogP)')
+    axes[1, 2].set_xlabel('QED')
+    axes[1, 2].set_ylabel('SAS')
+    plt.colorbar(scatter, ax=axes[1, 2], label='LogP')
     
     plt.tight_layout()
     return fig
