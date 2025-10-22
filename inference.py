@@ -5,24 +5,18 @@ Combines sampling, validation, and visualization into one script.
 """
 
 import argparse
-import io
 import json
 import os
 import sys
 
-from PIL import Image
 import matplotlib
-import matplotlib.pyplot as plt
-import numpy as np
-import pandas as pd
-from rdkit import Chem
-from rdkit.Chem import Draw
-
-from models.vae import SelfiesVAE
-from utils.sample import load_best_model, sample_from_vae, tokens_to_selfies
-from utils.validate import batch_validate_selfies, validate_selfies
-from utils.visualize import create_molecule_grid, create_property_distributions
 matplotlib.use('Agg')  # Use non-interactive backend
+import pandas as pd
+
+from utils.sample import load_best_model, sample_from_vae, tokens_to_selfies
+from utils.validate import batch_validate_selfies
+from utils.visualize import create_molecule_grid, create_property_distributions
+from utils.diversity import calculate_diversity
 
 
 # Add project root to path
@@ -35,6 +29,66 @@ def load_data():
     with open('mlx_data/qm9_cns_selfies.json', 'r') as f:
         meta = json.load(f)
     return meta['token_to_idx'], meta['idx_to_token'], meta['vocab_size']
+
+def load_dataset_smiles():
+    """Load SMILES from the training dataset"""
+    try:
+        # Load from the CNS dataset
+        df = pd.read_csv('mlx_data/qm9_cns.csv')
+        if 'smiles' in df.columns:
+            return df['smiles'].tolist()
+        elif 'SMILES' in df.columns:
+            return df['SMILES'].tolist()
+        else:
+            print(f"⚠️  No SMILES column found. Available columns: {df.columns.tolist()}")
+            return None
+    except FileNotFoundError:
+        print("⚠️  CNS dataset not found, skipping diversity calculation")
+        return None
+    except Exception as e:
+        print(f"⚠️  Error loading dataset: {e}")
+        return None
+
+def calculate_diversity_metrics(df):
+    """Calculate diversity between generated molecules and dataset"""
+    dataset_smiles = load_dataset_smiles()
+    if dataset_smiles is None:
+        return
+    
+    generated_smiles = df['smiles'].tolist()
+    
+    print(f"🔬 Calculating diversity metrics...")
+    print(f"   Generated molecules: {len(generated_smiles)}")
+    print(f"   Dataset molecules: {len(dataset_smiles)}")
+    
+    # Calculate median similarity
+    median_similarity = calculate_diversity(generated_smiles, dataset_smiles)
+    
+    print(f"📊 Diversity Results:")
+    print(f"   Median similarity to dataset: {median_similarity:.3f}")
+    print(f"   Diversity score: {1 - median_similarity:.3f} (higher = more diverse)")
+    
+    # Generate and save diversity histogram
+    print(f"📈 Generating diversity histogram...")
+    from utils.diversity import fingerprints, plot_similarity_distribution
+    from rdkit.DataStructs import TanimotoSimilarity
+    
+    # Calculate all similarities for histogram
+    fps_generated = fingerprints(generated_smiles)
+    fps_dataset = fingerprints(dataset_smiles)
+    
+    similarities = []
+    for fp1 in fps_generated:
+        for fp2 in fps_dataset:
+            sim = TanimotoSimilarity(fp1, fp2)
+            similarities.append(sim)
+    
+    # Create and save histogram
+    fig = plot_similarity_distribution(similarities, "Generated vs Dataset Similarity Distribution")
+    fig.savefig('output/diversity_histogram.png', dpi=300, bbox_inches='tight')
+    print(f"💾 Saved diversity histogram to output/diversity_histogram.png")
+    
+    return median_similarity
 
 def generate_molecules(model, num_samples, temperature=1.0, top_k=10):
     """Generate molecules using the VAE"""
@@ -147,6 +201,9 @@ def main():
     
     # Save results
     save_results(df, args.output_file)
+    
+    # Calculate diversity metrics
+    calculate_diversity_metrics(df)
     
     # Visualize molecules
     visualize_molecules(df, args.max_visualize)
