@@ -6,11 +6,18 @@ import matplotlib.pyplot as plt
 
 def fingerprints(smiles_list, radius: int=2, nBits: int=1024):
     """Generate Morgan fingerprints for a list of SMILES"""
+    from rdkit.Chem import rdFingerprintGenerator
+    
+    # Use the new MorganGenerator API
+    mfpgen = rdFingerprintGenerator.GetMorganGenerator(radius=radius, fpSize=nBits)
+    
     fps = []
     for smiles in smiles_list:
         mol = Chem.MolFromSmiles(smiles)
-        if not mol: continue
-        fp = AllChem.GetMorganFingerprintAsBitVect(mol, radius=radius, nBits=nBits)
+        if not mol: 
+            continue
+        # Use the new generator
+        fp = mfpgen.GetFingerprint(mol)
         fps.append(fp)
     return fps
 

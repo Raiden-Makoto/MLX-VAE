@@ -28,6 +28,7 @@ processed/
 
 # Large data files
 utils/fpscores.pkl.gz
+mlx_data/qm9.csv
 
 # Python packaging
 *.egg-info/
