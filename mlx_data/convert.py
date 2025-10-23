@@ -4,7 +4,7 @@ import numpy as np
 import json
 
 # Load QM9 dataset
-df = pd.read_csv('qm9_cns.csv', usecols=['smiles'])
+df = pd.read_csv('mlx_data/qm9_cns.csv', usecols=['smiles'])
 print(f"Original dataset size: {len(df)}")
 
 # Set SELFIES constraints for QM9

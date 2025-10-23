@@ -11,6 +11,16 @@ def validate_selfies(selfies_str):
     if not selfies_str: return None
     try:
         smiles = sf.decoder(selfies_str)
+        if not smiles: return None
+        
+        # Filter out charged molecules
+        if '+' in smiles or '-' in smiles:
+            return None
+        
+        # Filter out radicals (brackets indicate radicals/charges)
+        if '[' in smiles and ']' in smiles:
+            return None
+        
         mol = Chem.MolFromSmiles(smiles)
         if mol is None: return None
         

@@ -177,17 +177,10 @@ for epoch in range(start_epoch, total_epochs):
                 'KL': f'{avg_kl:.4f}'
             })
     
-    # Epoch summary
+    # Calculate final epoch metrics
     final_loss = mx.mean(mx.array(epoch_losses)).item()
     final_recon = mx.mean(mx.array(epoch_recon_losses)).item()
     final_kl = mx.mean(mx.array(epoch_kl_losses)).item()
-    
-    print(f"Epoch {epoch+1}/{total_epochs} Summary:")
-    print(f"  Beta:          {current_beta:.3f}")
-    print(f"  Total Loss:    {final_loss:.4f}")
-    print(f"  Recon Loss:    {final_recon:.4f}")
-    print(f"  KL Loss:       {final_kl:.4f}")
-    print(f"  Batches:       {len(batches)}")
     
     # Save best model if this is the best loss so far
     if final_loss < best_loss:
