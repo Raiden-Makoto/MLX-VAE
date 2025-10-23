@@ -157,7 +157,7 @@ def create_property_distributions(df):
 
 if __name__ == "__main__":
     # Load molecules
-    print("📊 Loading molecules from CSV...")
+    print("Loading molecules from CSV...")
     df = load_molecules_from_csv()
     print(f"✅ Loaded {len(df)} valid molecules")
     
@@ -166,7 +166,7 @@ if __name__ == "__main__":
     fig1 = create_molecule_grid(df, max_molecules=50)
     if fig1 is not None:
         fig1.savefig('output/molecule_grid.png', dpi=300, bbox_inches='tight')
-        print("💾 Saved molecule grid to output/molecule_grid.png")
+        print("Saved molecule grid to output/molecule_grid.png")
     else:
         print("❌ Could not create molecule grid visualization")
    

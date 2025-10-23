@@ -40,13 +40,13 @@ def load_dataset_smiles():
         elif 'SMILES' in df.columns:
             return df['SMILES'].tolist()
         else:
-            print(f"⚠️  No SMILES column found. Available columns: {df.columns.tolist()}")
+            print(f"No SMILES column found. Available columns: {df.columns.tolist()}")
             return None
     except FileNotFoundError:
-        print("⚠️  CNS dataset not found, skipping diversity calculation")
+        print("CNS dataset not found, skipping diversity calculation")
         return None
     except Exception as e:
-        print(f"⚠️  Error loading dataset: {e}")
+        print(f"Error loading dataset: {e}")
         return None
 
 def calculate_diversity_metrics(df):
@@ -57,19 +57,19 @@ def calculate_diversity_metrics(df):
     
     generated_smiles = df['smiles'].tolist()
     
-    print(f"🔬 Calculating diversity metrics...")
+    print(f"Calculating diversity metrics...")
     print(f"   Generated molecules: {len(generated_smiles)}")
     print(f"   Dataset molecules: {len(dataset_smiles)}")
     
     # Calculate median similarity
     median_similarity = calculate_diversity(generated_smiles, dataset_smiles)
     
-    print(f"📊 Diversity Results:")
+    print(f"Diversity Results:")
     print(f"   Median similarity to dataset: {median_similarity:.3f}")
     print(f"   Diversity score: {1 - median_similarity:.3f} (higher = more diverse)")
     
     # Generate and save diversity histogram
-    print(f"📈 Generating diversity histogram...")
+    print(f"Generating diversity histogram...")
     from utils.diversity import fingerprints, plot_similarity_distribution
     from rdkit.DataStructs import TanimotoSimilarity
     
@@ -86,13 +86,13 @@ def calculate_diversity_metrics(df):
     # Create and save histogram
     fig = plot_similarity_distribution(similarities, "Generated vs Dataset Similarity Distribution")
     fig.savefig('output/diversity_histogram.png', dpi=300, bbox_inches='tight')
-    print(f"💾 Saved diversity histogram to output/diversity_histogram.png")
+    print(f"Saved diversity histogram to output/diversity_histogram.png")
     
     return median_similarity
 
 def generate_molecules(model, num_samples, temperature=1.0, top_k=10):
     """Generate molecules using the VAE"""
-    print(f"🎲 Generating {num_samples} molecules with temperature {temperature} and top_k {top_k}...")
+    print(f"Generating {num_samples} molecules with temperature {temperature} and top_k {top_k}...")
     
     # Generate sequences
     samples = sample_from_vae(model, num_samples, temperature, top_k)
@@ -136,7 +136,7 @@ def visualize_molecules(df, max_molecules=20):
     fig = create_molecule_grid(df, max_molecules=max_molecules)
     if fig is not None:
         fig.savefig('output/molecule_grid.png', dpi=300, bbox_inches='tight')
-        print("💾 Saved molecule grid to output/molecule_grid.png")
+        print("Saved molecule grid to output/molecule_grid.png")
     else:
         print("❌ Could not create molecule grid visualization")
 
@@ -145,7 +145,7 @@ def visualize_molecules(df, max_molecules=20):
         prop_fig = create_property_distributions(df)
         if prop_fig is not None:
             prop_fig.savefig('output/property_distributions.png', dpi=300, bbox_inches='tight')
-            print("💾 Saved property distributions to output/property_distributions.png")
+            print("Saved property distributions to output/property_distributions.png")
         else:
             print("❌ Could not create property distributions visualization")
     except Exception as e:
@@ -155,7 +155,7 @@ def save_results(df, output_file='output/generation_results.csv'):
     """Save validation results to CSV"""
     if df is not None:
         df.to_csv(output_file, index=False)
-        print(f"💾 Saved results to {output_file}")
+        print(f"Saved results to {output_file}")
 
 def main():
     parser = argparse.ArgumentParser(description='Generate and analyze molecules with VAE')

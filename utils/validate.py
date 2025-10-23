@@ -45,11 +45,11 @@ def batch_validate_selfies(selfies_list):
         return results
     
     # Apply preliminary filtering to remove unstable molecules
-    print(f"🔬 Applying preliminary filtering to remove unstable molecules...")
+    print(f"Applying preliminary filtering to remove unstable molecules...")
     smiles_list = [result['smiles'] for result in results]
     filtered_smiles = preliminary_filter(smiles_list)
     
-    print(f"🔬 Applying strain filtering to remove molecules with high strain...")
+    print(f"Applying strain filtering to remove molecules with high strain...")
     filtered_smiles = strain_filter(filtered_smiles)
     
     # Create set for O(1) lookup and filter results in one pass
@@ -74,5 +74,5 @@ if __name__ == "__main__":
         df = pd.DataFrame(results)
         csv_path = 'output/validation_results.csv'
         df.to_csv(csv_path, index=False)
-        print(f"\n💾 Saved validation results to {csv_path}")
-        print(f"📊 CSV contains {len(df)} valid molecules with columns: {list(df.columns)}")
+        print(f"\nSaved validation results to {csv_path}")
+        print(f"CSV contains {len(df)} valid molecules with columns: {list(df.columns)}")

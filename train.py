@@ -70,7 +70,7 @@ if args.resume:
             start_epoch = last_completed_epoch + 1  # Resume from next epoch
         print(f"📅 Resuming from epoch {start_epoch} (last completed: {last_completed_epoch})")
     else:
-        print("⚠️  No last_epoch.txt found, starting from epoch 1")
+        print("No last_epoch.txt found, starting from epoch 1")
     
     # Load best model weights if available
     best_model_path = os.path.join(args.output_dir, 'best_model.npz')
@@ -195,7 +195,7 @@ for epoch in range(start_epoch, total_epochs):
         model.save_weights(best_model_path)
         print(f"🏆 New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
     else:
-        print(f"📊 Best loss so far: {best_loss:.4f}")
+        print(f"Best loss so far: {best_loss:.4f}")
     
     print("="*67)
     
@@ -203,7 +203,7 @@ for epoch in range(start_epoch, total_epochs):
     if (epoch + 1) % args.save_every == 0:
         checkpoint_path = os.path.join(args.output_dir, f'checkpoint_epoch_{epoch+1}.npz')
         model.save_weights(checkpoint_path)
-        print(f"💾 Saved checkpoint: {checkpoint_path}")
+        print(f"Saved checkpoint: {checkpoint_path}")
     
     # Save last epoch
     last_epoch_file = os.path.join(args.output_dir, 'last_epoch.txt')
