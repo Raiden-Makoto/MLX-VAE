@@ -105,6 +105,7 @@ def generate_molecules(model, num_samples, temperature=1.0, top_k=10):
     selfies_list = [s for s in selfies_list if s]
     
     print(f"✅ Generated {len(selfies_list)} non-empty SELFIES sequences")
+    
     return selfies_list
 
 def validate_molecules(selfies_list):

@@ -7,26 +7,38 @@ from utils.smarts import preliminary_filter
 from utils.sascorer import calculateScore
 from utils.geomopt import strain_filter
 
-def validate_selfies(selfies_str):
-    if not selfies_str: return None
+def validate_selfies(selfies_str, verbose=False):
+    if not selfies_str: 
+        if verbose: print(f"❌ EMPTY SELFIES: '{selfies_str}'")
+        return None
+    
     try:
         smiles = sf.decoder(selfies_str)
-        if not smiles: return None
-        
-        # Filter out charged molecules
-        if '+' in smiles or '-' in smiles:
+        if not smiles or smiles.strip() == '': 
+            if verbose: print(f"❌ EMPTY SMILES: SELFIES '{selfies_str}' -> empty SMILES")
             return None
         
-        # Filter out radicals (brackets indicate radicals/charges)
-        if '[' in smiles and ']' in smiles:
+        # Filter out charged molecules (only actual charges outside brackets)
+        # Brackets can contain formal charges like [NH3+] which are valid
+        if '+' in smiles.replace('[', '').replace(']', '') or '-' in smiles.replace('[', '').replace(']', ''):
+            if verbose: print(f"❌ CHARGED MOLECULE: '{smiles}' (contains charges outside brackets)")
+            return None
+        
+        # Filter out radicals (only actual radicals with dots)
+        # Valid bracketed atoms like [NH1], [nH], [cH] should pass
+        if '[.' in smiles or '.]' in smiles:
+            if verbose: print(f"❌ RADICAL: '{smiles}' (contains radical dots)")
             return None
         
         mol = Chem.MolFromSmiles(smiles)
-        if mol is None: return None
+        if mol is None: 
+            if verbose: print(f"❌ INVALID STRUCTURE: '{smiles}' (RDKit cannot parse)")
+            return None
         
         # Get canonical SMILES to avoid duplicates
         canonical_smiles = Chem.MolToSmiles(mol, canonical=True)
         
+        # Don't print successful validations - only failures
         return {
             'smiles': canonical_smiles,
             'logp': Descriptors.MolLogP(mol),
@@ -36,35 +48,128 @@ def validate_selfies(selfies_str):
             'qed': QED.qed(mol)
         }
     except Exception as e:
-        print(f"Error decoding SELFIES '{selfies_str}': {e}")
+        if verbose: print(f"❌ DECODE ERROR: SELFIES '{selfies_str}' -> {e}")
         return None
 
-def batch_validate_selfies(selfies_list):
+def batch_validate_selfies(selfies_list, verbose=True):
     results = []
     seen_smiles = set()  # Track unique SMILES
     
-    for selfies in selfies_list:
-        result = validate_selfies(selfies)
-        if result is not None:
-            # Only add if we haven't seen this canonical SMILES before
-            if result['smiles'] not in seen_smiles:
-                results.append(result)
-                seen_smiles.add(result['smiles'])
+    # Counters for detailed reporting
+    stats = {
+        'total_input': len(selfies_list),
+        'empty_selfies': 0,
+        'decode_errors': 0,
+        'empty_smiles': 0,
+        'charged_molecules': 0,
+        'radicals': 0,
+        'invalid_structures': 0,
+        'duplicates': 0,
+        'preliminary_filtered': 0,
+        'strain_filtered': 0,
+        'final_valid': 0
+    }
     
-    if not results:
+    if verbose:
+        print(f"🔍 DETAILED VALIDATION REPORT")
+        print(f"=" * 60)
+        print(f"Input: {stats['total_input']} SELFIES sequences")
+        print()
+    
+    # Step 1: Basic validation
+    if verbose: print("STEP 1: Basic SELFIES → SMILES validation")
+    basic_valid = []
+    
+    for i, selfies in enumerate(selfies_list):
+        if not selfies or selfies.strip() == '':
+            stats['empty_selfies'] += 1
+            if verbose: print(f"❌ EMPTY SELFIES: '{selfies}'")
+            continue
+            
+        result = validate_selfies(selfies, verbose=verbose)
+        if result is not None:
+            # Check for duplicates
+            if result['smiles'] in seen_smiles:
+                stats['duplicates'] += 1
+                if verbose: print(f"❌ DUPLICATE: '{result['smiles']}' (already seen)")
+            else:
+                basic_valid.append(result)
+                seen_smiles.add(result['smiles'])
+        else:
+            # Count specific failure types
+            try:
+                smiles = sf.decoder(selfies)
+                if not smiles or smiles.strip() == '':
+                    stats['empty_smiles'] += 1
+                    if verbose: print(f"❌ EMPTY SMILES: '{smiles}'")
+                elif '+' in smiles.replace('[', '').replace(']', '') or '-' in smiles.replace('[', '').replace(']', ''):
+                    stats['charged_molecules'] += 1
+                    if verbose: print(f"❌ CHARGED: '{smiles}'")
+                elif '[.' in smiles or '.]' in smiles:
+                    stats['radicals'] += 1
+                    if verbose: print(f"❌ RADICAL: '{smiles}'")
+                else:
+                    stats['invalid_structures'] += 1
+                    if verbose: print(f"❌ INVALID: '{smiles}'")
+            except:
+                stats['decode_errors'] += 1
+                if verbose: print(f"❌ DECODE ERROR: '{selfies}'")
+    
+    stats['basic_valid'] = len(basic_valid)
+    
+    if verbose:
+        print(f"\n📊 Basic Validation Summary:")
+        print(f"   ✅ Valid molecules: {stats['basic_valid']}")
+        print(f"   ❌ Empty SELFIES: {stats['empty_selfies']}")
+        print(f"   ❌ Decode errors: {stats['decode_errors']}")
+        print(f"   ❌ Empty SMILES: {stats['empty_smiles']}")
+        print(f"   ❌ Charged molecules: {stats['charged_molecules']}")
+        print(f"   ❌ Radicals: {stats['radicals']}")
+        print(f"   ❌ Invalid structures: {stats['invalid_structures']}")
+        print(f"   ❌ Duplicates: {stats['duplicates']}")
+        print()
+    
+    if not basic_valid:
+        if verbose: print("❌ No valid molecules after basic validation!")
         return results
     
-    # Apply preliminary filtering to remove unstable molecules
-    print(f"Applying preliminary filtering to remove unstable molecules...")
-    smiles_list = [result['smiles'] for result in results]
+    # Step 2: Preliminary filtering
+    if verbose: print("STEP 2: Preliminary filtering (unstable molecules)")
+    smiles_list = [result['smiles'] for result in basic_valid]
     filtered_smiles = preliminary_filter(smiles_list)
+    stats['preliminary_filtered'] = len(smiles_list) - len(filtered_smiles)
     
-    print(f"Applying strain filtering to remove molecules with high strain...")
-    filtered_smiles = strain_filter(filtered_smiles)
+    if verbose:
+        print(f"   ❌ Filtered out: {stats['preliminary_filtered']} molecules")
+        print()
     
-    # Create set for O(1) lookup and filter results in one pass
-    filtered_smiles_set = set(filtered_smiles)
-    return [result for result in results if result['smiles'] in filtered_smiles_set]
+    # Step 3: Strain filtering
+    if verbose: print("STEP 3: Strain filtering (high energy conformations)")
+    final_filtered_smiles = strain_filter(filtered_smiles)
+    stats['strain_filtered'] = len(filtered_smiles) - len(final_filtered_smiles)
+    
+    if verbose:
+        print(f"   ❌ Filtered out: {stats['strain_filtered']} molecules")
+        print()
+    
+    # Filter results to only include final valid molecules
+    filtered_smiles_set = set(final_filtered_smiles)
+    final_results = [result for result in basic_valid if result['smiles'] in filtered_smiles_set]
+    stats['final_valid'] = len(final_results)
+    
+    if verbose:
+        print(f"📊 FINAL SUMMARY:")
+        print(f"=" * 60)
+        print(f"Input molecules:     {stats['total_input']:3d}")
+        print(f"Basic validation:    {stats['basic_valid']:3d} ({stats['basic_valid']/stats['total_input']*100:.1f}%)")
+        print(f"Preliminary filter:  {len(filtered_smiles):3d} ({len(filtered_smiles)/stats['total_input']*100:.1f}%)")
+        print(f"Strain filter:       {stats['final_valid']:3d} ({stats['final_valid']/stats['total_input']*100:.1f}%)")
+        print(f"=" * 60)
+        print(f"Total loss: {stats['total_input'] - stats['final_valid']:3d} molecules")
+        print(f"Success rate: {stats['final_valid']/stats['total_input']*100:.1f}%")
+        print()
+    
+    return final_results
 
 if __name__ == "__main__":
     with open('output/generated_molecules.txt', 'r') as f:

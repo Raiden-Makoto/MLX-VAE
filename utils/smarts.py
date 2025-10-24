@@ -1,6 +1,6 @@
 from rdkit import Chem
 
-def preliminary_filter(smiles_list):
+def preliminary_filter(smiles_list, verbose=True):
     INSTABILITY_SMARTS = {
         "peroxide": "[OX2]–[OX2]",                    # –O–O– linkage
         "ozonide": "[OX2]–[OX2]–[OX2]",               # –O–O–O– linkage
@@ -14,16 +14,35 @@ def preliminary_filter(smiles_list):
         name: Chem.MolFromSmarts(pattern.replace("–", "-"))
         for name, pattern in INSTABILITY_SMARTS.items()
     }
+    
     filtered_smiles = []
+    filter_counts = {name: 0 for name in INSTABILITY_SMARTS.keys()}
+    filter_counts['invalid_mol'] = 0
+    
     for smiles in smiles_list:
         mol = Chem.MolFromSmiles(smiles)
-        if not mol: continue # an error occured
+        if not mol: 
+            filter_counts['invalid_mol'] += 1
+            if verbose: print(f"❌ INVALID MOLECULE: '{smiles}' (RDKit parsing failed)")
+            continue
+            
         should_filter = False
         for name, pattern in compiled_patterns.items():
             if mol.HasSubstructMatch(pattern):
-                print(f"{smiles} filtered out due to {name}.")
+                filter_counts[name] += 1
+                if verbose: print(f"❌ UNSTABLE: '{smiles}' ({name})")
                 should_filter = True
                 break
+                
         if not should_filter:
             filtered_smiles.append(smiles)
+    
+    if verbose:
+        print(f"📊 Preliminary Filter Summary:")
+        for reason, count in filter_counts.items():
+            if count > 0:
+                print(f"   ❌ {reason}: {count} molecules")
+        print(f"   ✅ Passed: {len(filtered_smiles)} molecules")
+        print()
+    
     return filtered_smiles

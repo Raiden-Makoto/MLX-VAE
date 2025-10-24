@@ -3,8 +3,8 @@ import selfies as sf
 import numpy as np
 import json
 
-# Load QM9 dataset
-df = pd.read_csv('mlx_data/qm9_cns.csv', usecols=['smiles'])
+# Load QM9 neutral dataset
+df = pd.read_csv('mlx_data/qm9_cns_neutral.csv', usecols=['smiles'])
 print(f"Original dataset size: {len(df)}")
 
 # Set SELFIES constraints for QM9
@@ -93,10 +93,10 @@ output_data = {
     'max_length': max_len
 }
 
-with open('qm9_cns_selfies.json', 'w') as f:
+with open('mlx_data/qm9_cns_selfies.json', 'w') as f:
     json.dump(output_data, f)
 
-np.save('qm9_cns_tokenized.npy', tokenized_data)
+np.save('mlx_data/qm9_cns_tokenized.npy', tokenized_data)
 
 print("Minimal data saved!")
 print(f"Tokenized data shape: {tokenized_data.shape}")
