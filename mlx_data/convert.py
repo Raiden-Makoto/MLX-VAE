@@ -2,6 +2,8 @@ import pandas as pd
 import selfies as sf
 import numpy as np
 import json
+from rdkit import Chem
+from rdkit.Chem import Descriptors, Crippen, Lipinski
 
 # Load QM9 neutral dataset
 df = pd.read_csv('mlx_data/qm9_cns_neutral.csv', usecols=['smiles'])
@@ -24,8 +26,23 @@ def smiles_to_selfies(smiles_str):
         print(f"Failed to convert {smiles_str}: {e}")
     return None
 
-print("Converting SMILES to SELFIES...")
+def calculate_properties(smiles_str):
+    """Calculate LogP and TPSA for a SMILES string"""
+    try:
+        mol = Chem.MolFromSmiles(smiles_str)
+        if mol is None:
+            return None, None
+        
+        logp = Crippen.MolLogP(mol)
+        tpsa = Descriptors.TPSA(mol)
+        return logp, tpsa
+    except:
+        return None, None
+
+print("Converting SMILES to SELFIES and calculating properties...")
 selfies_list = []
+logp_list = []
+tpsa_list = []
 valid_indices = []
 
 for i, smiles in enumerate(df['smiles']):
@@ -34,10 +51,14 @@ for i, smiles in enumerate(df['smiles']):
     
     selfies = smiles_to_selfies(smiles)
     if selfies is not None:
-        selfies_list.append(selfies)
-        valid_indices.append(i)
+        logp, tpsa = calculate_properties(smiles)
+        if logp is not None and tpsa is not None:
+            selfies_list.append(selfies)
+            logp_list.append(logp)
+            tpsa_list.append(tpsa)
+            valid_indices.append(i)
 
-print(f"Successfully converted {len(selfies_list)}/{len(df)} molecules")
+print(f"Successfully converted {len(selfies_list)}/{len(df)} molecules with properties")
 
 # Build vocabulary
 def get_selfies_vocab(selfies_list):
@@ -90,11 +111,14 @@ output_data = {
     'token_to_idx': token_to_idx,
     'idx_to_token': idx_to_token,
     'vocab_size': len(token_to_idx),
-    'max_length': max_len
+    'max_length': max_len,
+    'logp_values': logp_list,
+    'tpsa_values': tpsa_list
 }
 
 with open('mlx_data/qm9_cns_selfies.json', 'w') as f:
     json.dump(output_data, f)
+
 
 np.save('mlx_data/qm9_cns_tokenized.npy', tokenized_data)
 

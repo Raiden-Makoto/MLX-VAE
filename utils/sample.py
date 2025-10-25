@@ -9,6 +9,7 @@ import sys
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
 from models.transformer_vae import SelfiesTransformerVAE
+from utils.validate import batch_validate_selfies
 
 with open(os.path.join(project_root, 'mlx_data/qm9_cns_selfies.json')) as f:
     meta = json.load(f)
@@ -177,3 +178,71 @@ if __name__ == "__main__":
     print(f"📝 First few samples:")
     for i, selfies in enumerate(selfies_strings[:5]):
         print(f"  {i+1}: {selfies}")
+
+def generate_conditional_molecules(model, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
+    """Generate molecules with target LogP and TPSA values"""
+    print(f"🧬 Generating {num_samples} molecules with:")
+    print(f"   LogP: {target_logp}")
+    print(f"   TPSA: {target_tpsa}")
+    
+    # Generate conditional samples
+    samples = model.generate_conditional(target_logp, target_tpsa, num_samples, temperature, top_k)
+    
+    # Convert to SELFIES
+    selfies_list = tokens_to_selfies(samples)
+    print(f"✅ Generated {len(selfies_list)} SELFIES sequences")
+    
+    # Validate molecules
+    print("🔍 Validating generated molecules...")
+    validation_results = batch_validate_selfies(selfies_list, verbose=False)
+    
+    # Filter valid molecules
+    valid_molecules = []
+    for i, result in enumerate(validation_results):
+        if result and isinstance(result, dict):
+            valid_molecules.append({
+                'selfies': selfies_list[i],
+                'smiles': result.get('smiles', ''),
+                'logp': result.get('logp', 0),
+                'tpsa': result.get('tpsa', 0),
+                'mw': result.get('mw', 0),
+                'qed': result.get('qed', 0),
+                'sas': result.get('sas', 0)
+            })
+    
+    print(f"✅ {len(valid_molecules)} valid molecules generated")
+    return valid_molecules
+
+def analyze_logp_tpsa_accuracy(molecules, target_logp, target_tpsa):
+    """Analyze how well generated molecules match LogP and TPSA targets"""
+    if not molecules:
+        return {}
+    
+    logp_values = [m.get('logp', 0) for m in molecules if 'logp' in m and m['logp'] > 0]
+    tpsa_values = [m.get('tpsa', 0) for m in molecules if 'tpsa' in m and m['tpsa'] > 0]
+    
+    if not logp_values or not tpsa_values:
+        print("❌ No valid property values to analyze")
+        return {}
+    
+    logp_mean = sum(logp_values) / len(logp_values)
+    tpsa_mean = sum(tpsa_values) / len(tpsa_values)
+    
+    logp_error = abs(logp_mean - target_logp)
+    tpsa_error = abs(tpsa_mean - target_tpsa)
+    
+    print(f"\n📊 CONDITIONAL GENERATION ANALYSIS")
+    print(f"=" * 40)
+    print(f"Target LogP: {target_logp:.2f}")
+    print(f"Generated LogP: {logp_mean:.2f} ± {logp_error:.2f}")
+    print(f"Target TPSA: {target_tpsa:.2f}")
+    print(f"Generated TPSA: {tpsa_mean:.2f} ± {tpsa_error:.2f}")
+    print(f"LogP Accuracy: {max(0, 1 - logp_error/2):.1%}")
+    print(f"TPSA Accuracy: {max(0, 1 - tpsa_error/50):.1%}")
+    
+    return {
+        'logp_mean': logp_mean,
+        'tpsa_mean': tpsa_mean,
+        'logp_error': logp_error,
+        'tpsa_error': tpsa_error
+    }

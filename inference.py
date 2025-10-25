@@ -13,7 +13,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import pandas as pd
 
-from utils.sample import load_best_model, sample_from_vae, tokens_to_selfies
+from utils.sample import load_best_model, sample_from_vae, tokens_to_selfies, generate_conditional_molecules, analyze_logp_tpsa_accuracy
 from utils.validate import batch_validate_selfies
 from utils.visualize import create_molecule_grid, create_property_distributions
 from utils.diversity import calculate_diversity
@@ -156,45 +156,106 @@ def main():
     parser.add_argument('--checkpoint', type=str, default='checkpoints',
                        help='Model checkpoint directory to load from')
     
+    # Conditional generation arguments (DEFAULT)
+    parser.add_argument('--regular', action='store_true',
+                       help='Use regular generation instead of conditional')
+    parser.add_argument('--logp', type=float, default=1.0,
+                       help='Target LogP value for conditional generation (default: 1.0)')
+    parser.add_argument('--tpsa', type=float, default=40.0,
+                       help='Target TPSA value for conditional generation (default: 40.0)')
+    parser.add_argument('--analyze', action='store_true', default=True,
+                       help='Analyze conditional generation accuracy (default: True)')
+    
     args = parser.parse_args()
     
     # Ensure output directory exists
     os.makedirs('output', exist_ok=True)
     
-    print("🚀 Starting molecule generation and analysis pipeline...")
-    print("="*60)
+    # Check if regular generation is requested (conditional is DEFAULT)
+    if args.regular:
+        print("🚀 Starting molecule generation and analysis pipeline...")
+        print("="*60)
+        
+        # Load model
+        print("📥 Loading model...")
+        model = load_best_model(args.checkpoint)
+        print(f"✅ Loaded model from {args.checkpoint}")
+        
+        # Generate molecules
+        samples = sample_from_vae(model, args.num_samples, args.temperature, args.top_k)
+        selfies_list = tokens_to_selfies(samples)
     
-    # Load model
-    print("📥 Loading model...")
-    model = load_best_model(args.checkpoint)
-    print(f"✅ Loaded model from {args.checkpoint}")
-    
-    # Generate molecules
-    samples = sample_from_vae(model, args.num_samples, args.temperature, args.top_k)
-    selfies_list = tokens_to_selfies(samples)
-    
-    if not selfies_list:
-        print("❌ No molecules generated. Exiting.")
-        return
-    
-    # Validate molecules
-    df = validate_molecules(selfies_list)
-    
-    if df is None:
-        print("❌ No valid molecules found. Exiting.")
-        return
-    
-    # Save results
-    save_results(df, args.output_file)
-    
-    # Calculate diversity metrics
-    calculate_diversity_metrics(df)
-    
-    # Visualize molecules
-    visualize_molecules(df, args.max_visualize)
-    
-    print("="*60)
-    print("🎉 Pipeline completed successfully!")
+        if not selfies_list:
+            print("❌ No molecules generated. Exiting.")
+            return
+        
+        # Validate molecules
+        df = validate_molecules(selfies_list)
+        
+        if df is None:
+            print("❌ No valid molecules found. Exiting.")
+            return
+        
+        # Save results
+        save_results(df, args.output_file)
+        
+        # Calculate diversity metrics
+        calculate_diversity_metrics(df)
+        
+        # Visualize molecules
+        visualize_molecules(df, args.max_visualize)
+        
+        print("="*60)
+        print("🎉 Pipeline completed successfully!")
+        
+    else:
+        # CONDITIONAL GENERATION (DEFAULT)
+        print("🧬 CONDITIONAL MOLECULAR GENERATION")
+        print("="*50)
+        print(f"Target LogP: {args.logp}")
+        print(f"Target TPSA: {args.tpsa}")
+        print(f"Number of samples: {args.num_samples}")
+        print(f"Temperature: {args.temperature}")
+        print(f"Top-k: {args.top_k}")
+        print()
+        
+        # Load model
+        print("📥 Loading model...")
+        model = load_best_model(args.checkpoint)
+        print("✅ Model loaded successfully!")
+        print()
+        
+        # Generate conditional molecules
+        molecules = generate_conditional_molecules(
+            model, args.logp, args.tpsa, args.num_samples, 
+            args.temperature, args.top_k
+        )
+        
+        if not molecules:
+            print("❌ No valid molecules generated!")
+            return
+        
+        print(f"✅ Generated {len(molecules)} valid molecules")
+        
+        # Analyze accuracy (default behavior)
+        if args.analyze:
+            print("\n📊 Analyzing conditional generation accuracy...")
+            analyze_logp_tpsa_accuracy(molecules, args.logp, args.tpsa)
+        
+        # Convert to DataFrame for consistent processing
+        df = pd.DataFrame(molecules)
+        
+        # Save results
+        save_results(df, args.output_file)
+        
+        # Calculate diversity metrics
+        calculate_diversity_metrics(df)
+        
+        # Visualize molecules
+        visualize_molecules(df, args.max_visualize)
+        
+        print("="*60)
+        print("🎉 Conditional generation completed!")
 
 if __name__ == "__main__":
     main()
