@@ -26,7 +26,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 def load_data():
     """Load vocabulary and metadata"""
-    with open('mlx_data/qm9_cns_selfies.json', 'r') as f:
+    with open('mlx_data/cns_metadata.json', 'r') as f:
         meta = json.load(f)
     return meta['token_to_idx'], meta['idx_to_token'], meta['vocab_size']
 
@@ -34,14 +34,21 @@ def load_dataset_smiles():
     """Load SMILES from the training dataset"""
     try:
         # Load from the CNS dataset
-        df = pd.read_csv('mlx_data/qm9_cns.csv')
-        if 'smiles' in df.columns:
-            return df['smiles'].tolist()
-        elif 'SMILES' in df.columns:
-            return df['SMILES'].tolist()
-        else:
-            print(f"No SMILES column found. Available columns: {df.columns.tolist()}")
-            return None
+        with open('mlx_data/cns_final_dataset.json', 'r') as f:
+            data = json.load(f)
+        
+        # Convert SELFIES to SMILES
+        smiles_list = []
+        for entry in data:
+            try:
+                selfies_str = entry['selfies']
+                smiles = decoder(selfies_str)
+                smiles_list.append(smiles)
+            except:
+                continue
+        
+        print(f"Loaded {len(smiles_list)} SMILES from CNS dataset")
+        return smiles_list
     except FileNotFoundError:
         print("CNS dataset not found, skipping diversity calculation")
         return None
@@ -159,10 +166,10 @@ def main():
     # Conditional generation arguments (DEFAULT)
     parser.add_argument('--regular', action='store_true',
                        help='Use regular generation instead of conditional')
-    parser.add_argument('--logp', type=float, default=1.0,
-                       help='Target LogP value for conditional generation (default: 1.0)')
-    parser.add_argument('--tpsa', type=float, default=40.0,
-                       help='Target TPSA value for conditional generation (default: 40.0)')
+    parser.add_argument('--logp', type=float, default=0.3,
+                        help='Target LogP value for conditional generation (default: 0.3, dataset median)')
+    parser.add_argument('--tpsa', type=float, default=35.5,
+                        help='Target TPSA value for conditional generation (default: 35.5, dataset median)')
     parser.add_argument('--analyze', action='store_true', default=True,
                        help='Analyze conditional generation accuracy (default: True)')
     

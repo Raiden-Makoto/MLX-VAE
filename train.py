@@ -32,20 +32,26 @@ parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 
 # Load data and metadata
-with open('mlx_data/qm9_cns_selfies.json', 'r') as f:
+with open('mlx_data/cns_metadata.json', 'r') as f:
     meta = json.load(f)
 
-tokenized = np.load('mlx_data/qm9_cns_tokenized.npy')
+tokenized = np.load('mlx_data/cns_tokenized.npy')
 token_to_idx = meta['token_to_idx']
 idx_to_token = meta['idx_to_token']
 vocab_size = meta['vocab_size']
 max_length = meta['max_length']
 
+# Load properties for conditional training
+logp_values = meta['logp_values']
+tpsa_values = meta['tpsa_values']
+properties = [[logp, tpsa] for logp, tpsa in zip(logp_values, tpsa_values)]
+
 args = parser.parse_args()
 
 # Prepare data
 tokenized_mx = mx.array(tokenized)
-batches = create_batches(tokenized_mx, args.batch_size, shuffle=True)
+properties_mx = mx.array(properties)
+batches = create_batches(tokenized_mx, properties_mx, args.batch_size, shuffle=True)
 
 # Initialize model and optimizer
 print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
@@ -96,10 +102,12 @@ best_loss = float('inf')
 best_model_path = os.path.join(args.output_dir, 'best_model.npz')
 
 # Training function
-def train_step(model, batch, optimizer, beta, noise_std=0.05, diversity_weight=0.01):
-    """Single training step"""
+def train_step(model, batch_data, optimizer, beta, noise_std=0.05, diversity_weight=0.01):
+    """Single training step with conditional properties"""
+    batch, properties = batch_data  # Unpack batch and properties
+    
     def loss_fn(model):
-        logits, mu, logvar = model(batch, training=True, noise_std=noise_std)
+        logits, mu, logvar = model(batch, properties=properties, training=True, noise_std=noise_std)
         return compute_loss(batch, logits, mu, logvar, beta, diversity_weight)
     
     # Compute loss and gradients

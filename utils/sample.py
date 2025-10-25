@@ -11,12 +11,12 @@ sys.path.append(project_root)
 from models.transformer_vae import SelfiesTransformerVAE
 from utils.validate import batch_validate_selfies
 
-with open(os.path.join(project_root, 'mlx_data/qm9_cns_selfies.json')) as f:
+with open(os.path.join(project_root, 'mlx_data/cns_metadata.json')) as f:
     meta = json.load(f)
 
 token_to_idx = meta['token_to_idx']
 idx_to_token = meta['idx_to_token']
-START = token_to_idx['<START>']
+START = token_to_idx.get('[START]', 1)  # Use [START] token
 max_length = meta['max_length']
 vocab_size = meta['vocab_size']
 

@@ -27,9 +27,16 @@ class SelfiesTransformerVAE(nn.Module):
         )
         self.latent_dim = latent_dim
         
-        # Property embedding for conditional generation (optional)
+        # FiLM layers for conditional generation
         self.num_properties = 2  # logp, tpsa
-        self.property_embedding = None  # Will be initialized if needed
+        self.film_gamma = nn.Linear(self.num_properties, latent_dim)  # Scaling parameters
+        self.film_beta = nn.Linear(self.num_properties, latent_dim)   # Shifting parameters
+        
+        # Property normalization (dataset statistics)
+        self.logp_mean = 0.33
+        self.logp_std = 0.95
+        self.tpsa_mean = 36.53
+        self.tpsa_std = 20.82
 
     def reparameterize(self, mu, logvar):
         """Reparameterization trick for VAE"""
@@ -37,7 +44,7 @@ class SelfiesTransformerVAE(nn.Module):
         eps = mx.random.normal(mu.shape)
         return mu + std * eps
 
-    def __call__(self, x, training=True, noise_std=0.05):
+    def __call__(self, x, properties=None, training=True, noise_std=0.05):
         # x: [B, T] - input sequences
         input_seq = x[:, :-1]
         target_seq = x[:, 1:]  # Shift for next token prediction
@@ -45,6 +52,20 @@ class SelfiesTransformerVAE(nn.Module):
         # Encode to latent space
         mu, logvar = self.encoder(input_seq)
         z = self.reparameterize(mu, logvar)
+        
+        # Apply FiLM conditioning if properties provided
+        if properties is not None:
+            # Normalize properties for better FiLM learning
+            normalized_props = mx.zeros_like(properties)
+            normalized_props[:, 0] = (properties[:, 0] - self.logp_mean) / self.logp_std
+            normalized_props[:, 1] = (properties[:, 1] - self.tpsa_mean) / self.tpsa_std
+            
+            # Compute FiLM parameters (scaling and shifting)
+            gamma = self.film_gamma(normalized_props)  # [batch_size, latent_dim]
+            beta = self.film_beta(normalized_props)    # [batch_size, latent_dim]
+            
+            # Apply feature-wise linear modulation
+            z = gamma * z + beta
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
@@ -60,19 +81,21 @@ class SelfiesTransformerVAE(nn.Module):
         """Generate molecules with target LogP and TPSA values"""
         print(f"🎯 Generating molecules with LogP={target_logp}, TPSA={target_tpsa}")
         
-        # Initialize property embedding if not already done
-        if self.property_embedding is None:
-            self.property_embedding = nn.Linear(self.num_properties, self.latent_dim)
-        
-        # Create property embeddings
+        # Create property arrays for FiLM conditioning
         properties_array = mx.array([[target_logp, target_tpsa]] * num_samples)
-        property_latent = self.property_embedding(properties_array)  # [num_samples, latent_dim]
+        
+        # Normalize properties for better FiLM learning
+        normalized_props = mx.zeros_like(properties_array)
+        normalized_props[:, 0] = (properties_array[:, 0] - self.logp_mean) / self.logp_std
+        normalized_props[:, 1] = (properties_array[:, 1] - self.tpsa_mean) / self.tpsa_std
         
         # Sample base latent vectors
         base_z = mx.random.normal((num_samples, self.latent_dim))
         
-        # Combine base latent with property guidance
-        z = base_z + property_latent
+        # Apply FiLM conditioning
+        gamma = self.film_gamma(normalized_props)  # [num_samples, latent_dim]
+        beta = self.film_beta(normalized_props)    # [num_samples, latent_dim]
+        z = gamma * base_z + beta
         
         # Decode to generate molecules
         samples = self._decode_conditional(z, temperature, top_k)

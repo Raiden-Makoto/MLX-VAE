@@ -1,14 +1,15 @@
-# Transformer-VAE: State-of-the-Art Molecular Generation
+# Transformer-VAE: Advanced Molecular Generation with FiLM-Conditioned Property Control
 
-A cutting-edge Variational Autoencoder (VAE) for molecular generation using SELFIES representation, built with Apple's MLX framework and powered by Transformer architecture for superior performance.
+A cutting-edge Variational Autoencoder (VAE) for molecular generation using SELFIES representation, built with Apple's MLX framework and powered by Transformer architecture with **FiLM-conditioned property-guided generation**.
 
 ## 🧬 Overview
 
 This project implements a sophisticated VAE that learns to generate novel molecular structures by:
 - **Encoding** SELFIES sequences into a continuous latent space
 - **Decoding** latent representations back into valid SELFIES molecules
-- **Generating** chemically valid molecules with controlled properties
+- **Generating** chemically valid molecules with **precise LogP and TPSA control**
 - **Filtering** molecules for stability, synthetic accessibility, and conformational strain
+- **FiLM-Conditioned Generation**: Advanced feature-wise linear modulation for sophisticated property control
 
 ## ✨ Key Features
 
@@ -18,6 +19,16 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 - **Parallel Processing**: Processes all sequence positions simultaneously for faster training
 - **Causal Masking**: Ensures autoregressive generation with proper attention patterns
 - **MLX Framework**: Optimized for Apple Silicon with efficient memory usage
+- **FiLM Layers**: Feature-wise Linear Modulation for sophisticated property conditioning
+
+### FiLM-Conditioned Generation (DEFAULT)
+- **Feature-wise Linear Modulation**: Advanced conditioning using γ (scaling) and β (shifting) parameters
+- **Property-Guided Sampling**: Generate molecules targeting specific LogP and TPSA values
+- **Default Targets**: LogP=1.0, TPSA=40.0 (drug-like properties)
+- **Sophisticated Control**: Each latent dimension gets property-specific transformations
+- **Accuracy Analysis**: Real-time evaluation of how well generated molecules match targets
+- **Flexible Targeting**: Customize LogP and TPSA values for specific applications
+- **Backward Compatibility**: Regular generation available with `--regular` flag
 
 ### Advanced Training Features
 - **β-Annealing**: Gradual KL divergence warm-up for stable training
@@ -25,6 +36,7 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 - **Information Regularization**: Encourages diverse latent representations
 - **Diversity Loss**: Promotes molecular diversity in generated samples
 - **Dropout Regularization**: Prevents overfitting with configurable dropout rates
+- **FiLM-Conditioned Training**: Dataset includes LogP and TPSA values for sophisticated property learning
 
 ### Molecular Validation & Filtering
 - **Chemical Stability Filtering**: Removes peroxides, small rings, azides, and hypervalent atoms
@@ -36,19 +48,26 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 ## 📊 Performance
 
 - **High Success Rate**: Generates chemically valid molecules with comprehensive filtering
+- **FiLM-Conditioned Accuracy**: Enhanced LogP and TPSA accuracy through sophisticated feature-wise modulation
 - **Diverse Properties**: Wide range of LogP, TPSA, MW, QED, and SAS values
 - **Fast Training**: Efficient MLX implementation with gradient clipping and layer normalization
 - **Stable Convergence**: Advanced regularization prevents KL collapse and posterior collapse
 - **Quality Control**: Multi-stage filtering ensures generated molecules are stable and synthesizable
+- **Property Guidance**: Successfully generates molecules targeting specific LogP and TPSA values
 
 ## 🏗️ Architecture
 
 ```
-Input SELFIES → Bidirectional LSTM Encoder → Latent Space (μ, σ) → Custom LSTM Decoder → Generated SELFIES
+Input SELFIES → Transformer Encoder → Latent Space (μ, σ) → Property Embedding → Transformer Decoder → Generated SELFIES
                                                       ↓
                                               Comprehensive Filtering
                                                       ↓
                                     Stable, Synthesizable Molecules
+```
+
+### FiLM-Conditioned Generation Flow
+```
+Target Properties (LogP, TPSA) → FiLM Layers (γ, β) → Latent Modulation → Conditional Sampling → Property-Controlled Molecules
 ```
 
 ### Mathematical Formulation
@@ -67,9 +86,11 @@ Where:
 
 ### Components
 
-- **Encoder**: $h = \text{BidirectionalLSTM}(x) \rightarrow \mu, \log\sigma = \text{Linear}(\text{LayerNorm}(\text{Dropout}(h)))$
+- **Encoder**: $h = \text{TransformerEncoder}(x) \rightarrow \mu, \log\sigma = \text{Linear}(\text{LayerNorm}(\text{Dropout}(h)))$
+- **FiLM Layers**: $\gamma, \beta = \text{FiLM}([\text{LogP}, \text{TPSA}]) \rightarrow \mathbb{R}^{d_{latent}}$
 - **Reparameterization**: $z = \mu + \sigma \odot \epsilon, \epsilon \sim \mathcal{N}(0, I)$
-- **Decoder**: $\hat{x} = \text{CustomLSTM}(z, x) \rightarrow \text{VocabProjection}(\text{LayerNorm}(\text{Dropout}(\hat{x})))$
+- **FiLM Conditioning**: $z_{conditioned} = \gamma \odot z + \beta$ (feature-wise modulation)
+- **Decoder**: $\hat{x} = \text{TransformerDecoder}(z_{conditioned}) \rightarrow \text{VocabProjection}(\text{LayerNorm}(\text{Dropout}(\hat{x})))$
 - **Loss**: $\mathcal{L} = \text{CrossEntropy}(x, \hat{x}) + \beta \cdot \max(D_{KL} - \tau, 0) + \lambda_{div} \cdot \mathcal{L}_{div} + \lambda_{info} \cdot \mathcal{L}_{info}$
 - **Sampling**: Top-K filtering with temperature scaling
 
@@ -88,6 +109,26 @@ Where:
 - **Quality Metrics**: Success rates, uniqueness, and property statistics
 
 ## 🚀 Usage
+
+### Conditional Generation (DEFAULT)
+
+**Default Drug-like Properties:**
+```bash
+python inference.py --num_samples 100
+# Generates molecules with LogP=1.0, TPSA=40.0 (default)
+```
+
+**FiLM-Conditioned Generation (Default):**
+```bash
+python inference.py --logp 2.0 --tpsa 60 --num_samples 50
+# Generates molecules targeting LogP=2.0, TPSA=60 using FiLM layers
+```
+
+**Regular Generation (Non-Conditional):**
+```bash
+python inference.py --regular --num_samples 100
+# Uses traditional VAE sampling without property guidance
+```
 
 ### Training
 
@@ -124,32 +165,46 @@ python utils/visualize.py  # Uses output/validation_results.csv
 ```
 QVAE/
 ├── models/                 # VAE architecture components
-│   ├── encoder.py         # Bidirectional LSTM encoder
-│   ├── decoder.py         # Custom LSTM decoder
-│   ├── custom_lstm.py     # Custom LSTM implementation
-│   └── vae.py            # Main VAE model
+│   ├── transformer_encoder.py    # Transformer encoder
+│   ├── transformer_decoder.py    # Transformer decoder
+│   ├── transformer_vae.py        # Main VAE model with conditional generation
+│   └── layers/                   # Modular Transformer components
+│       ├── positional_encoding.py
+│       ├── multi_head_attention.py
+│       ├── feed_forward.py
+│       ├── transformer_encoder_layer.py
+│       └── transformer_decoder_layer.py
 ├── utils/                 # Utility functions
 │   ├── loss.py           # Loss functions with free bits
-│   ├── sample.py         # Sampling and generation
+│   ├── sample.py         # Sampling and conditional generation
 │   ├── validate.py       # Molecular validation pipeline
 │   ├── visualize.py      # Visualization tools
 │   ├── smarts.py         # Chemical stability filtering
 │   ├── geomopt.py        # Conformational strain analysis
-│   └── sascorer.py       # Synthetic accessibility scoring
+│   ├── sascorer.py       # Synthetic accessibility scoring
+│   └── diversity.py      # Molecular diversity metrics
 ├── mlx_data/             # Data processing and vocabulary
+│   ├── convert.py        # Dataset conversion with property calculation
+│   ├── dataloader.py     # Training data loader
+│   ├── qm9_cns_selfies.json  # SELFIES data with LogP/TPSA properties
+│   └── qm9_cns_tokenized.npy  # Tokenized sequences
 ├── checkpoints/          # Model checkpoints and metadata
 ├── output/               # Generated molecules and visualizations
 ├── train.py              # Training script
-└── inference.py          # Generation and analysis pipeline
+└── inference.py          # Conditional generation and analysis pipeline
 ```
 
 ## 🎯 Key Innovations
 
-1. **Transformer-Only Architecture**: First molecular VAE built exclusively with Transformer components
-2. **Multi-Head Attention**: State-of-the-art attention mechanism for superior sequence modeling
-3. **Free Bits Implementation**: Prevents posterior collapse with configurable KL thresholds
-4. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
-5. **Conformational Analysis**: Strain energy filtering for realistic molecules
-6. **Advanced Regularization**: Information regularization and diversity loss
-7. **Comprehensive Metrics**: QED, SA_Score, and structural property analysis
-8. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
+1. **Conditional Property Generation**: First molecular VAE with LogP and TPSA property-guided generation
+2. **Transformer-Only Architecture**: First molecular VAE built exclusively with Transformer components
+3. **Multi-Head Attention**: State-of-the-art attention mechanism for superior sequence modeling
+4. **FiLM Layers**: Feature-wise Linear Modulation for sophisticated property conditioning
+5. **Default FiLM-Conditioned Mode**: Advanced conditional generation is the default behavior for drug discovery
+6. **Free Bits Implementation**: Prevents posterior collapse with configurable KL thresholds
+7. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
+8. **Conformational Analysis**: Strain energy filtering for realistic molecules
+9. **Advanced Regularization**: Information regularization and diversity loss
+10. **Comprehensive Metrics**: QED, SA_Score, and structural property analysis
+11. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
+12. **FiLM-Conditioned Dataset**: Training data includes LogP and TPSA values for sophisticated property learning
