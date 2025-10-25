@@ -1,4 +1,4 @@
-from models.vae import SelfiesVAE
+from models.transformer_vae import SelfiesTransformerVAE
 from utils.loss import compute_loss
 from utils.sample import sample_from_vae
 from mlx_data.dataloader import create_batches
@@ -26,6 +26,9 @@ parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs t
 parser.add_argument('--max_beta', type=float, default=0.1, help='Maximum beta value')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
+parser.add_argument('--num_heads', type=int, default=8, help='Number of attention heads')
+parser.add_argument('--num_layers', type=int, default=6, help='Number of transformer layers')
+parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 
 # Load data and metadata
@@ -45,12 +48,17 @@ tokenized_mx = mx.array(tokenized)
 batches = create_batches(tokenized_mx, args.batch_size, shuffle=True)
 
 # Initialize model and optimizer
-print(f"Initializing model with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
-model = SelfiesVAE(
+print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
+print(f"Transformer config: num_heads={args.num_heads}, num_layers={args.num_layers}, dropout={args.dropout}")
+
+model = SelfiesTransformerVAE(
     vocab_size=vocab_size,
     embedding_dim=args.embedding_dim,
     hidden_dim=args.hidden_dim,
-    latent_dim=args.latent_dim
+    latent_dim=args.latent_dim,
+    num_heads=args.num_heads,
+    num_layers=args.num_layers,
+    dropout=args.dropout
 )
 optimizer = Adam(learning_rate=args.learning_rate)
 
@@ -104,6 +112,8 @@ def train_step(model, batch, optimizer, beta, noise_std=0.05, diversity_weight=0
         for key, value in grads.items():
             if isinstance(value, dict):
                 clipped[key] = clip_grads(value)
+            elif isinstance(value, list):
+                clipped[key] = [mx.clip(v, -1.0, 1.0) if hasattr(v, 'shape') else v for v in value]
             else:
                 clipped[key] = mx.clip(value, -1.0, 1.0)
         return clipped

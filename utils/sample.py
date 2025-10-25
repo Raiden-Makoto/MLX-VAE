@@ -8,7 +8,7 @@ import sys
 # Add project root to path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(project_root)
-from models.vae import SelfiesVAE
+from models.transformer_vae import SelfiesTransformerVAE
 
 with open(os.path.join(project_root, 'mlx_data/qm9_cns_selfies.json')) as f:
     meta = json.load(f)
@@ -59,14 +59,14 @@ def load_best_model(checkpoint_dir='checkpoints', **model_kwargs):
     }
     default_kwargs.update(model_kwargs)
     
-    model = SelfiesVAE(**default_kwargs)
+    model = SelfiesTransformerVAE(**default_kwargs)
     model.load_weights(best_model_path)
     
     print(f"✅ Loaded best model from: {best_model_path}")
     return model
 
 def sample_from_vae(
-    model: SelfiesVAE,
+    model: SelfiesTransformerVAE,
     num_samples: int,
     temperature: float=1.0,
     top_k: int=50
@@ -75,7 +75,7 @@ def sample_from_vae(
     Sample sequences from VAE decoder using top-k sampling
     
     Args:
-        model: Trained SelfiesVAE model
+        model: Trained SelfiesTransformerVAE model
         num_samples: Number of sequences to generate
         temperature: Sampling temperature (higher = more random)
         top_k: Top-k sampling threshold (keep top k most likely tokens)
@@ -92,8 +92,8 @@ def sample_from_vae(
     
     # Generate sequence token by token
     for _ in range(max_length - 1):
-        # Get logits for next token
-        logits = model.D(z, seq)[:, -1, :]
+        # Get logits for next token using decoder directly
+        logits = model.decoder(z, seq)[:, -1, :]
         
         # Apply top-k sampling
         logits = top_k_sampling(logits, k=top_k)

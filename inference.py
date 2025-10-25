@@ -90,23 +90,6 @@ def calculate_diversity_metrics(df):
     
     return median_similarity
 
-def generate_molecules(model, num_samples, temperature=1.0, top_k=10):
-    """Generate molecules using the VAE"""
-    print(f"Generating {num_samples} molecules with temperature {temperature} and top_k {top_k}...")
-    
-    # Generate sequences
-    samples = sample_from_vae(model, num_samples, temperature, top_k)
-    
-    # Convert to SELFIES
-    token_to_idx, idx_to_token, vocab_size = load_data()
-    selfies_list = tokens_to_selfies(samples)
-    
-    # Filter out empty sequences
-    selfies_list = [s for s in selfies_list if s]
-    
-    print(f"✅ Generated {len(selfies_list)} non-empty SELFIES sequences")
-    
-    return selfies_list
 
 def validate_molecules(selfies_list):
     """Validate generated molecules and convert to SMILES"""
@@ -187,7 +170,8 @@ def main():
     print(f"✅ Loaded model from {args.checkpoint}")
     
     # Generate molecules
-    selfies_list = generate_molecules(model, args.num_samples, args.temperature, args.top_k)
+    samples = sample_from_vae(model, args.num_samples, args.temperature, args.top_k)
+    selfies_list = [tokens_to_selfies(sample) for sample in samples]
     
     if not selfies_list:
         print("❌ No molecules generated. Exiting.")

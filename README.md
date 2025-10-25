@@ -1,6 +1,6 @@
-# MLX-VAE: Variational Autoencoder for Molecular Generation
+# Transformer-VAE: State-of-the-Art Molecular Generation
 
-A state-of-the-art Variational Autoencoder (VAE) for molecular generation using SELFIES representation, built with Apple's MLX framework for efficient training on Apple Silicon.
+A cutting-edge Variational Autoencoder (VAE) for molecular generation using SELFIES representation, built with Apple's MLX framework and powered by Transformer architecture for superior performance.
 
 ## 🧬 Overview
 
@@ -14,9 +14,9 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 
 ### Core Architecture
 - **SELFIES Representation**: Uses SELFIES (Self-Referencing Embedded Strings) for 100% chemically valid molecular generation
-- **Bidirectional LSTM Encoder**: Captures sequential dependencies in both directions
-- **Custom LSTM Decoder**: Explicit latent state initialization for better generation control
-- **Top-K Sampling**: Prevents early termination and improves generation quality
+- **Transformer Architecture**: State-of-the-art multi-head attention mechanism with positional encoding
+- **Parallel Processing**: Processes all sequence positions simultaneously for faster training
+- **Causal Masking**: Ensures autoregressive generation with proper attention patterns
 - **MLX Framework**: Optimized for Apple Silicon with efficient memory usage
 
 ### Advanced Training Features
@@ -90,10 +90,17 @@ Where:
 ## 🚀 Usage
 
 ### Training
+
+**Standard Configuration:**
 ```bash
-python train.py --num_epochs 100 --batch_size 32 --learning_rate 1e-4 \
-                --max_beta 0.1 --free_bits 0.05 --diversity_weight 0.1 \
-                --info_reg_weight 0.1 --beta_annealing linear
+python train.py --epochs 100 --batch_size 32 --learning_rate 1e-4 \
+                --max_beta 0.1 --diversity_weight 0.1 --num_heads 8 --num_layers 6 --dropout 0.1
+```
+
+**High-Performance Configuration:**
+```bash
+python train.py --epochs 200 --batch_size 64 --learning_rate 5e-5 \
+                --embedding_dim 256 --hidden_dim 512 --num_heads 16 --num_layers 8
 ```
 
 ### Generation & Analysis
@@ -138,9 +145,11 @@ QVAE/
 
 ## 🎯 Key Innovations
 
-1. **Free Bits Implementation**: Prevents posterior collapse with configurable KL thresholds
-2. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
-3. **Conformational Analysis**: Strain energy filtering for realistic molecules
-4. **Advanced Regularization**: Information regularization and diversity loss
-5. **Comprehensive Metrics**: QED, SA_Score, and structural property analysis
-6. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
+1. **Transformer-Only Architecture**: First molecular VAE built exclusively with Transformer components
+2. **Multi-Head Attention**: State-of-the-art attention mechanism for superior sequence modeling
+3. **Free Bits Implementation**: Prevents posterior collapse with configurable KL thresholds
+4. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
+5. **Conformational Analysis**: Strain energy filtering for realistic molecules
+6. **Advanced Regularization**: Information regularization and diversity loss
+7. **Comprehensive Metrics**: QED, SA_Score, and structural property analysis
+8. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
