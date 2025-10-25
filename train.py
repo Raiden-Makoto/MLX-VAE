@@ -1,7 +1,7 @@
 from models.transformer_vae import SelfiesTransformerVAE
 from utils.loss import compute_loss
 from utils.sample import sample_from_vae
-from mlx_data.dataloader import create_batches
+from mlx_data.dataloader import create_batches, split_train_val
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -30,6 +30,8 @@ parser.add_argument('--num_heads', type=int, default=8, help='Number of attentio
 parser.add_argument('--num_layers', type=int, default=6, help='Number of transformer layers')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
+parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (epochs without improvement)')
+parser.add_argument('--val_freq', type=int, default=5, help='Validate every N epochs')
 
 # Load data and metadata
 with open('mlx_data/cns_metadata.json', 'r') as f:
@@ -48,10 +50,21 @@ properties = [[logp, tpsa] for logp, tpsa in zip(logp_values, tpsa_values)]
 
 args = parser.parse_args()
 
-# Prepare data
+# Prepare data with train/val split
 tokenized_mx = mx.array(tokenized)
 properties_mx = mx.array(properties)
-batches = create_batches(tokenized_mx, properties_mx, args.batch_size, shuffle=True)
+
+# Split into train/val (90/10)
+(train_tokens, train_properties), (val_tokens, val_properties) = split_train_val(
+    tokenized_mx, properties_mx, val_ratio=0.1, shuffle=True
+)
+
+# Create batches
+train_batches = create_batches(train_tokens, train_properties, args.batch_size, shuffle=True)
+val_batches = create_batches(val_tokens, val_properties, args.batch_size, shuffle=False)
+
+print(f"📊 Data split: {len(train_tokens)} train, {len(val_tokens)} val")
+print(f"📦 Batches: {len(train_batches)} train, {len(val_batches)} val")
 
 # Initialize model and optimizer
 print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
@@ -97,9 +110,11 @@ if args.resume:
 print(f"Initialized model and optimizer")
 print(f"Checkpoints will be saved to: {args.output_dir}")
 
-# Best model tracking
+# Best model tracking and early stopping
 best_loss = float('inf')
 best_model_path = os.path.join(args.output_dir, 'best_model.npz')
+patience_counter = 0
+last_val_loss = float('inf')
 
 # Training function
 def train_step(model, batch_data, optimizer, beta, noise_std=0.05, diversity_weight=0.01):
@@ -133,6 +148,37 @@ def train_step(model, batch_data, optimizer, beta, noise_std=0.05, diversity_wei
     
     return total_loss.item(), recon_loss.item(), kl_loss.item(), diversity_loss.item()
 
+# Validation function
+def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
+    """Validate model on validation set"""
+    total_val_loss = 0.0
+    total_recon_loss = 0.0
+    total_kl_loss = 0.0
+    total_diversity_loss = 0.0
+    
+    for batch_data in val_batches:
+        batch, properties = batch_data
+        
+        # Forward pass without gradients
+        logits, mu, logvar = model(batch, properties=properties, training=False, noise_std=noise_std)
+        loss = compute_loss(batch, logits, mu, logvar, beta, diversity_weight)
+        
+        total_loss, recon_loss, kl_loss, diversity_loss = loss
+        
+        total_val_loss += total_loss.item()
+        total_recon_loss += recon_loss.item()
+        total_kl_loss += kl_loss.item()
+        total_diversity_loss += diversity_loss.item()
+    
+    # Average losses
+    num_batches = len(val_batches)
+    avg_val_loss = total_val_loss / num_batches
+    avg_recon_loss = total_recon_loss / num_batches
+    avg_kl_loss = total_kl_loss / num_batches
+    avg_diversity_loss = total_diversity_loss / num_batches
+    
+    return avg_val_loss, avg_recon_loss, avg_kl_loss, avg_diversity_loss
+
 # Beta annealing function
 def get_beta(epoch, total_epochs, warmup_epochs, max_beta):
     """Compute beta value with annealing"""
@@ -156,7 +202,9 @@ print(f"Batch size: {args.batch_size}, Learning rate: {args.learning_rate}")
 print(f"Beta warmup: {args.beta_warmup_epochs} epochs, Max beta: {args.max_beta}")
 print(f"Latent noise std: {args.latent_noise_std}")
 print(f"Diversity weight: {args.diversity_weight}")
-print(f"Total batches per epoch: {len(batches)}")
+print(f"Validation frequency: every {args.val_freq} epochs")
+print(f"Early stopping patience: {args.patience} validation checks")
+print(f"Total batches per epoch: {len(train_batches)} train, {len(val_batches)} val")
 print("="*67)
 
 for epoch in range(start_epoch, total_epochs):
@@ -169,7 +217,7 @@ for epoch in range(start_epoch, total_epochs):
     
     # Training loop with progress bar
     progress_bar = tqdm.tqdm(
-        batches, 
+        train_batches, 
         desc=f"Epoch {epoch+1}/{total_epochs} (β={current_beta:.3f})",
         unit="batch",
         leave=False
@@ -200,13 +248,33 @@ for epoch in range(start_epoch, total_epochs):
     final_recon = mx.mean(mx.array(epoch_recon_losses)).item()
     final_kl = mx.mean(mx.array(epoch_kl_losses)).item()
     
-    # Save best model if this is the best loss so far
-    if final_loss < best_loss:
-        best_loss = final_loss
-        model.save_weights(best_model_path)
-        print(f"🏆 New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
+    print(f"📊 Epoch {epoch+1} Results:")
+    print(f"  Train Loss: {final_loss:.4f} (Recon: {final_recon:.4f}, KL: {final_kl:.4f})")
+    
+    # Validation every N epochs (including epoch 0)
+    should_validate = epoch == 0 or (epoch + 1) % args.val_freq == 0 or epoch == total_epochs - 1
+    
+    if should_validate:
+        val_loss, val_recon, val_kl, val_diversity = validate(model, val_batches, current_beta, args.latent_noise_std, args.diversity_weight)
+        print(f"  Val Loss: {val_loss:.4f} (Recon: {val_recon:.4f}, KL: {val_kl:.4f})")
+        
+        # Early stopping logic
+        if val_loss < best_loss:
+            best_loss = val_loss
+            model.save_weights(best_model_path)
+            patience_counter = 0
+            print(f"🏆 New best model! Val Loss: {val_loss:.4f} -> Saved to {best_model_path}")
+        else:
+            patience_counter += 1
+            print(f"Best val loss so far: {best_loss:.4f} (patience: {patience_counter}/{args.patience})")
+            
+            # Early stopping check
+            if patience_counter >= args.patience:
+                print(f"🛑 Early stopping! No improvement for {args.patience} validation checks.")
+                print(f"Best validation loss: {best_loss:.4f}")
+                break
     else:
-        print(f"Best loss so far: {best_loss:.4f}")
+        print(f"  Skipping validation (next validation at epoch {((epoch + 1) // args.val_freq + 1) * args.val_freq})")
     
     print("="*67)
     

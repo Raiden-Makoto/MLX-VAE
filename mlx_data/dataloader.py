@@ -100,6 +100,30 @@ def create_batches(tokenized_mx, properties_mx, batch_size, shuffle=True):
     
     return batches
 
+def split_train_val(tokenized_mx, properties_mx, val_ratio=0.1, shuffle=True):
+    """Split data into training and validation sets"""
+    num_samples = len(tokenized_mx)
+    indices = np.arange(num_samples)
+    
+    if shuffle:
+        np.random.shuffle(indices)
+    
+    split_idx = int(num_samples * (1 - val_ratio))
+    train_indices = indices[:split_idx]
+    val_indices = indices[split_idx:]
+    
+    # Convert to lists for MLX indexing
+    train_indices_list = train_indices.tolist()
+    val_indices_list = val_indices.tolist()
+    
+    train_tokens = tokenized_mx[train_indices_list]
+    train_properties = properties_mx[train_indices_list]
+    
+    val_tokens = tokenized_mx[val_indices_list]
+    val_properties = properties_mx[val_indices_list]
+    
+    return (train_tokens, train_properties), (val_tokens, val_properties)
+
 def save_metadata(token_to_idx, idx_to_token, vocab_size, max_length, properties):
     """Save metadata for inference"""
     metadata = {
