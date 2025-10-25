@@ -116,18 +116,32 @@ def sample_from_vae(
 def tokens_to_selfies(tokens):
     """Convert token indices back to SELFIES strings"""
     selfies_strings = []
+    
+    # Handle both numpy arrays and MLX arrays
+    if hasattr(tokens, 'tolist'):
+        tokens = tokens.tolist()
+    
     for i, seq in enumerate(tokens):
         tokens_list = []
-        for token_idx in seq:
-            # Convert integer index to string key for lookup
-            token_key = str(token_idx.item())
-            if token_key in idx_to_token:
-                token = idx_to_token[token_key]
-                if token == '<END>' or token == '<PAD>':
-                    break
-                # Skip <START> token in output
-                if token != '<START>':
-                    tokens_list.append(token)
+        try:
+            for token_idx in seq:
+                # Convert to int and then string for lookup
+                if hasattr(token_idx, 'item'):
+                    token_idx = token_idx.item()
+                elif hasattr(token_idx, 'tolist'):
+                    token_idx = token_idx.tolist()
+                
+                token_key = str(int(token_idx))
+                if token_key in idx_to_token:
+                    token = idx_to_token[token_key]
+                    if token == '<END>' or token == '<PAD>':
+                        break
+                    # Skip <START> token in output
+                    if token != '<START>':
+                        tokens_list.append(token)
+        except (IndexError, ValueError) as e:
+            print(f"Warning: Error processing sequence {i}: {e}")
+            continue
         
         selfies_str = ''.join(tokens_list)
         selfies_strings.append(selfies_str)

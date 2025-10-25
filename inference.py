@@ -171,7 +171,7 @@ def main():
     
     # Generate molecules
     samples = sample_from_vae(model, args.num_samples, args.temperature, args.top_k)
-    selfies_list = [tokens_to_selfies(sample) for sample in samples]
+    selfies_list = tokens_to_selfies(samples)
     
     if not selfies_list:
         print("❌ No molecules generated. Exiting.")
