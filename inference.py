@@ -159,10 +159,10 @@ def main():
     # Conditional generation arguments (DEFAULT)
     parser.add_argument('--regular', action='store_true',
                        help='Use regular generation instead of conditional')
-    parser.add_argument('--logp', type=float, default=1.0,
-                       help='Target LogP value for conditional generation (default: 1.0)')
-    parser.add_argument('--tpsa', type=float, default=40.0,
-                       help='Target TPSA value for conditional generation (default: 40.0)')
+    parser.add_argument('--logp', type=float, default=2.0,
+                       help='Target LogP value for conditional generation (default: 2.0)')
+    parser.add_argument('--tpsa', type=float, default=47.0,
+                       help='Target TPSA value for conditional generation (default: 47.0)')
     parser.add_argument('--analyze', action='store_true', default=True,
                        help='Analyze conditional generation accuracy (default: True)')
     

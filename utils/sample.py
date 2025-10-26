@@ -56,7 +56,9 @@ def load_best_model(checkpoint_dir='checkpoints', **model_kwargs):
         'vocab_size': vocab_size,
         'embedding_dim': 128,
         'hidden_dim': 256,
-        'latent_dim': 64
+        'latent_dim': 64,
+        'num_heads': 4,  # Match training config
+        'num_layers': 4  # Match training config
     }
     default_kwargs.update(model_kwargs)
     

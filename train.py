@@ -32,10 +32,10 @@ parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 
 # Load data and metadata
-with open('mlx_data/qm9_cns_selfies.json', 'r') as f:
+with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
     meta = json.load(f)
 
-tokenized = np.load('mlx_data/qm9_cns_tokenized.npy')
+tokenized = np.load('mlx_data/chembl_cns_tokenized.npy')
 token_to_idx = meta['token_to_idx']
 idx_to_token = meta['idx_to_token']
 vocab_size = meta['vocab_size']
