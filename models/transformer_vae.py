@@ -92,10 +92,10 @@ class SelfiesTransformerVAE(nn.Module):
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
         property_latent = self.property_embedding(properties_array)  # [num_samples, latent_dim]
         
-        # Sample from standard normal (VAE prior) and add property guidance
-        # The property embedding shifts the prior to guide generation
-        base_z = mx.random.normal((num_samples, self.latent_dim))
-        z = base_z + 0.3 * property_latent  # Scale property guidance to avoid overwhelming structure
+        # Start from property-guided latent instead of random noise
+        # This uses property_embedding as the base, then add some noise for diversity
+        noise = mx.random.normal((num_samples, self.latent_dim)) * 0.5  # Small noise for diversity
+        z = property_latent + noise
         
         # Decode to generate molecules
         samples = self._decode_conditional(z, temperature, top_k)
