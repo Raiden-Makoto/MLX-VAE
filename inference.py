@@ -26,7 +26,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 def load_data():
     """Load vocabulary and metadata"""
-    with open('mlx_data/qm9_cns_selfies.json', 'r') as f:
+    with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
         meta = json.load(f)
     return meta['token_to_idx'], meta['idx_to_token'], meta['vocab_size']
 
@@ -34,13 +34,13 @@ def load_dataset_smiles():
     """Load SMILES from the training dataset"""
     try:
         # Load from the CNS dataset
-        df = pd.read_csv('mlx_data/qm9_cns.csv')
-        if 'smiles' in df.columns:
-            return df['smiles'].tolist()
-        elif 'SMILES' in df.columns:
-            return df['SMILES'].tolist()
+        with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
+            meta = json.load(f)
+        molecules = meta.get('molecules', [])
+        if molecules and isinstance(molecules[0], dict) and 'smiles' in molecules[0]:
+            return [mol['smiles'] for mol in molecules]
         else:
-            print(f"No SMILES column found. Available columns: {df.columns.tolist()}")
+            print(f"No SMILES found in dataset")
             return None
     except FileNotFoundError:
         print("CNS dataset not found, skipping diversity calculation")

@@ -27,17 +27,30 @@ class SelfiesTransformerVAE(nn.Module):
         )
         self.latent_dim = latent_dim
         
-        # Property embedding for conditional generation (optional)
+        # Property embedding for conditional generation
         self.num_properties = 2  # logp, tpsa
-        self.property_embedding = None  # Will be initialized if needed
+        self.property_embedding = nn.Linear(self.num_properties, self.latent_dim)
+        
+        # Property normalization parameters (will be set from training)
+        self.logp_mean = None
+        self.logp_std = None
+        self.tpsa_mean = None
+        self.tpsa_std = None
 
+    def set_property_normalization(self, logp_mean, logp_std, tpsa_mean, tpsa_std):
+        """Set property normalization parameters"""
+        self.logp_mean = logp_mean
+        self.logp_std = logp_std
+        self.tpsa_mean = tpsa_mean
+        self.tpsa_std = tpsa_std
+    
     def reparameterize(self, mu, logvar):
         """Reparameterization trick for VAE"""
         std = mx.exp(0.5 * logvar)
         eps = mx.random.normal(mu.shape)
         return mu + std * eps
 
-    def __call__(self, x, training=True, noise_std=0.05):
+    def __call__(self, x, properties=None, training=True, noise_std=0.05):
         # x: [B, T] - input sequences
         input_seq = x[:, :-1]
         target_seq = x[:, 1:]  # Shift for next token prediction
@@ -45,6 +58,13 @@ class SelfiesTransformerVAE(nn.Module):
         # Encode to latent space
         mu, logvar = self.encoder(input_seq)
         z = self.reparameterize(mu, logvar)
+        
+        # Condition latent space on properties if provided
+        if properties is not None:
+            # properties: [B, 2] - logp and tpsa
+            property_embedding = self.property_embedding(properties)  # [B, latent_dim]
+            # Combine with base latent code
+            z = z + property_embedding
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
@@ -60,19 +80,22 @@ class SelfiesTransformerVAE(nn.Module):
         """Generate molecules with target LogP and TPSA values"""
         print(f"🎯 Generating molecules with LogP={target_logp}, TPSA={target_tpsa}")
         
-        # Initialize property embedding if not already done
-        if self.property_embedding is None:
-            self.property_embedding = nn.Linear(self.num_properties, self.latent_dim)
+        # Normalize properties if normalization params are set
+        if self.logp_mean is not None and self.logp_std is not None:
+            norm_logp = (target_logp - self.logp_mean) / self.logp_std
+            norm_tpsa = (target_tpsa - self.tpsa_mean) / self.tpsa_std
+        else:
+            norm_logp = target_logp
+            norm_tpsa = target_tpsa
         
         # Create property embeddings
-        properties_array = mx.array([[target_logp, target_tpsa]] * num_samples)
+        properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
         property_latent = self.property_embedding(properties_array)  # [num_samples, latent_dim]
         
-        # Sample base latent vectors
+        # Sample from standard normal (VAE prior) and add property guidance
+        # The property embedding shifts the prior to guide generation
         base_z = mx.random.normal((num_samples, self.latent_dim))
-        
-        # Combine base latent with property guidance
-        z = base_z + property_latent
+        z = base_z + 0.3 * property_latent  # Scale property guidance to avoid overwhelming structure
         
         # Decode to generate molecules
         samples = self._decode_conditional(z, temperature, top_k)

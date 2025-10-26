@@ -5,7 +5,7 @@ from rdkit import Chem
 from rdkit.Chem import Crippen, Descriptors
 from chembl_webresource_client.new_client import new_client
 import numpy as np
-from tqdm import tqdm
+import tqdm
 import os
 
 print("Downloading ChEMBL molecules with CNS properties...")
@@ -23,9 +23,14 @@ output_npy = 'mlx_data/chembl_cns_tokenized.npy'
 # Initialize output data structure
 if not os.path.exists(output_path):
     output_data = []
+    existing_smiles = set()
 else:
     with open(output_path, 'r') as f:
-        output_data = json.load(f)
+        data = json.load(f)
+        output_data = data.get('molecules', [])
+        # Create a set of existing SMILES to avoid duplicates
+        existing_smiles = set(mol['smiles'] for mol in output_data)
+        print(f"Found {len(existing_smiles)} existing molecules")
 
 def smiles_to_selfies(smiles_str):
     try:
@@ -73,13 +78,13 @@ except Exception as e:
 
 # Process molecules - no LogP filter
 print("Processing CNS molecules...")
-target_count = 5000
+target_count = 20000  # Target for training (will continue from 10k)
 processed = len(output_data)  # Start from existing count
 skipped = 0
 
 print(f"Starting from {processed} molecules already collected")
 
-for i, record in enumerate(results):
+for i, record in enumerate(tqdm.tqdm(results, desc="Processing molecules")):
     if processed >= target_count:
         break
     
@@ -90,6 +95,10 @@ for i, record in enumerate(results):
         
         if not smiles:
             skipped += 1
+            continue
+        
+        # Skip if we've already seen this SMILES
+        if smiles in existing_smiles:
             continue
         
         # Calculate properties
@@ -109,6 +118,7 @@ for i, record in enumerate(results):
             'tpsa': tpsa if tpsa is not None else 0.0
         }
         output_data.append(molecule_entry)
+        existing_smiles.add(smiles)  # Track as seen
         processed += 1
         
         # Write to JSON immediately every molecule

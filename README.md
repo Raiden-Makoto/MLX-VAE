@@ -27,7 +27,7 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 - **Dropout Regularization**: Prevents overfitting with configurable dropout rates
 
 ### Molecular Validation & Filtering
-- **Chemical Stability Filtering**: Removes peroxides, small rings, azides, and hypervalent atoms
+- **Chemical Stability Filtering**: Removes peroxides, small rings, and azides
 - **Synthetic Accessibility (SA_Score)**: Filters molecules based on synthetic feasibility
 - **Drug-likeness (QED)**: Evaluates molecules for drug-like properties
 - **Conformational Strain**: Removes molecules with high strain energy (>100 kcal/mol)

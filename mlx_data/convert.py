@@ -5,11 +5,11 @@ import json
 from rdkit import Chem
 from rdkit.Chem import Descriptors, Crippen, Lipinski
 
-# Load QM9 neutral dataset
-df = pd.read_csv('mlx_data/qm9_cns_neutral.csv', usecols=['smiles'])
+# Load dataset
+df = pd.read_csv('mlx_data/chembl_cns_neutral.csv', usecols=['smiles'])
 print(f"Original dataset size: {len(df)}")
 
-# Set SELFIES constraints for QM9
+# Set SELFIES constraints
 sf.set_semantic_constraints()
 constraints = sf.get_semantic_constraints()
 constraints['?'] = 3
@@ -116,11 +116,11 @@ output_data = {
     'tpsa_values': tpsa_list
 }
 
-with open('mlx_data/qm9_cns_selfies.json', 'w') as f:
+with open('mlx_data/chembl_cns_selfies.json', 'w') as f:
     json.dump(output_data, f)
 
 
-np.save('mlx_data/qm9_cns_tokenized.npy', tokenized_data)
+np.save('mlx_data/chembl_cns_tokenized.npy', tokenized_data)
 
 print("Minimal data saved!")
 print(f"Tokenized data shape: {tokenized_data.shape}")

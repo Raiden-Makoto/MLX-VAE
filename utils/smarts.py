@@ -6,9 +6,9 @@ def preliminary_filter(smiles_list, verbose=True):
         "ozonide": "[OX2]–[OX2]–[OX2]",               # –O–O–O– linkage
         "azide": "[N]=[N+]=[N-]",                     # azide group
         "diazonium": "[NX3+]=[N]",                    # diazonium species
-        "small_ring_3": "C1CC1",                      # cyclopropane
-        "small_ring_4": "C1CCC1",                     # cyclobutane
-        "hypervalent": "[!#1;!#6;!#7;!#8;!#9]",        # atoms heavier than typical valence
+        # Removed: "small_ring_3": "C1CC1",                      # cyclopropane - too common
+        # Removed: "small_ring_4": "C1CCC1",                     # cyclobutane - too common
+        # Removed: "hypervalent": "[!#1;!#6;!#7;!#8;!#9]",        # atoms heavier than typical valence
     }
     compiled_patterns = {
         name: Chem.MolFromSmarts(pattern.replace("–", "-"))

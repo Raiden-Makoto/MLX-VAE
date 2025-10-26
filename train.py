@@ -41,11 +41,56 @@ idx_to_token = meta['idx_to_token']
 vocab_size = meta['vocab_size']
 max_length = meta['max_length']
 
+# Load properties and normalize
+molecules = meta['molecules']
+properties_raw = np.array([[mol['logp'], mol['tpsa']] for mol in molecules], dtype=np.float32)
+
+# Normalize properties (zero mean, unit variance)
+logp_mean = np.mean(properties_raw[:, 0])
+logp_std = np.std(properties_raw[:, 0])
+tpsa_mean = np.mean(properties_raw[:, 1])
+tpsa_std = np.std(properties_raw[:, 1])
+
+properties = np.array([
+    [(prop[0] - logp_mean) / logp_std, (prop[1] - tpsa_mean) / tpsa_std]
+    for prop in properties_raw
+], dtype=np.float32)
+
+print(f"Property normalization:")
+print(f"  LogP: mean={logp_mean:.2f}, std={logp_std:.2f}")
+print(f"  TPSA: mean={tpsa_mean:.2f}, std={tpsa_std:.2f}")
+
 args = parser.parse_args()
 
 # Prepare data
 tokenized_mx = mx.array(tokenized)
-batches = create_batches(tokenized_mx, args.batch_size, shuffle=True)
+properties_mx = mx.array(properties)
+
+# Create function to create batches with properties
+def create_batches_with_properties(data, properties, batch_size, shuffle=True):
+    """Create batches from data with corresponding properties"""
+    n_samples = data.shape[0]
+    
+    if shuffle:
+        # Create random permutation of indices
+        indices = mx.random.permutation(mx.arange(n_samples))
+        data = data[indices]
+        properties = properties[indices]
+    
+    n_batches = n_samples // batch_size
+    batches = []
+    
+    for i in range(n_batches):
+        start_idx = i * batch_size
+        end_idx = start_idx + batch_size
+        
+        batch_data = data[start_idx:end_idx]
+        batch_properties = properties[start_idx:end_idx]
+        batches.append((batch_data, batch_properties))
+    
+    return batches
+
+batches = create_batches_with_properties(tokenized_mx, properties_mx, args.batch_size, shuffle=True)
 
 # Initialize model and optimizer
 print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
@@ -60,6 +105,9 @@ model = SelfiesTransformerVAE(
     num_layers=args.num_layers,
     dropout=args.dropout
 )
+
+# Set property normalization
+model.set_property_normalization(logp_mean, logp_std, tpsa_mean, tpsa_std)
 optimizer = Adam(learning_rate=args.learning_rate)
 
 # Create output directory
@@ -85,6 +133,18 @@ if args.resume:
     if os.path.exists(best_model_path):
         print(f"🏆 Loading best model weights from: {best_model_path}")
         model.load_weights(best_model_path)
+        # Also load normalization stats if available
+        norm_file = os.path.join(args.output_dir, 'property_norm.json')
+        if os.path.exists(norm_file):
+            import json
+            with open(norm_file, 'r') as f:
+                norm_stats = json.load(f)
+            model.set_property_normalization(
+                norm_stats['logp_mean'],
+                norm_stats['logp_std'],
+                norm_stats['tpsa_mean'],
+                norm_stats['tpsa_std']
+            )
     else:
         print("❌ No best_model.npz found, starting from scratch...")
 
@@ -96,11 +156,11 @@ best_loss = float('inf')
 best_model_path = os.path.join(args.output_dir, 'best_model.npz')
 
 # Training function
-def train_step(model, batch, optimizer, beta, noise_std=0.05, diversity_weight=0.01):
+def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01):
     """Single training step"""
     def loss_fn(model):
-        logits, mu, logvar = model(batch, training=True, noise_std=noise_std)
-        return compute_loss(batch, logits, mu, logvar, beta, diversity_weight)
+        logits, mu, logvar = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
+        return compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
     
     # Compute loss and gradients
     loss, grads = mx.value_and_grad(loss_fn)(model)
@@ -167,9 +227,9 @@ for epoch in range(start_epoch, total_epochs):
         leave=False
     )
     
-    for batch_idx, batch in enumerate(progress_bar):
+    for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss = train_step(model, batch, optimizer, current_beta, args.latent_noise_std, args.diversity_weight)
+        total_loss, recon_loss, kl_loss, diversity_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight)
         
         # Store losses
         epoch_losses.append(total_loss)
@@ -196,6 +256,16 @@ for epoch in range(start_epoch, total_epochs):
     if final_loss < best_loss:
         best_loss = final_loss
         model.save_weights(best_model_path)
+        # Also save normalization stats
+        import json
+        norm_stats = {
+            'logp_mean': float(logp_mean),
+            'logp_std': float(logp_std),
+            'tpsa_mean': float(tpsa_mean),
+            'tpsa_std': float(tpsa_std)
+        }
+        with open(f'{args.output_dir}/property_norm.json', 'w') as f:
+            json.dump(norm_stats, f)
         print(f"🏆 New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
     else:
         print(f"Best loss so far: {best_loss:.4f}")

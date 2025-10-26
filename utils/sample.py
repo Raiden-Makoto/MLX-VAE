@@ -11,7 +11,7 @@ sys.path.append(project_root)
 from models.transformer_vae import SelfiesTransformerVAE
 from utils.validate import batch_validate_selfies
 
-with open(os.path.join(project_root, 'mlx_data/qm9_cns_selfies.json')) as f:
+with open(os.path.join(project_root, 'mlx_data/chembl_cns_selfies.json')) as f:
     meta = json.load(f)
 
 token_to_idx = meta['token_to_idx']
@@ -64,6 +64,20 @@ def load_best_model(checkpoint_dir='checkpoints', **model_kwargs):
     
     model = SelfiesTransformerVAE(**default_kwargs)
     model.load_weights(best_model_path)
+    
+    # Load normalization stats if available
+    norm_file = os.path.join(checkpoint_dir, 'property_norm.json')
+    if os.path.exists(norm_file):
+        import json
+        with open(norm_file, 'r') as f:
+            norm_stats = json.load(f)
+        model.set_property_normalization(
+            norm_stats['logp_mean'],
+            norm_stats['logp_std'],
+            norm_stats['tpsa_mean'],
+            norm_stats['tpsa_std']
+        )
+        print(f"📊 Loaded property normalization stats")
     
     print(f"✅ Loaded best model from: {best_model_path}")
     return model
