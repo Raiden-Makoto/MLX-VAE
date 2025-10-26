@@ -26,8 +26,8 @@ parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs t
 parser.add_argument('--max_beta', type=float, default=0.1, help='Maximum beta value')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
-parser.add_argument('--num_heads', type=int, default=8, help='Number of attention heads')
-parser.add_argument('--num_layers', type=int, default=6, help='Number of transformer layers')
+parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads')
+parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 
