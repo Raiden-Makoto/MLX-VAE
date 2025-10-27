@@ -1,7 +1,7 @@
 import mlx.core as mx
 import mlx.nn as nn
 
-from .layers import PositionalEncoding, TransformerDecoderLayer
+from .layers import PositionalEncoding, TransformerDecoderLayer, FILM
 
 class SelfiesTransformerDecoder(nn.Module):
     """Transformer decoder for SELFIES generation"""
@@ -27,8 +27,12 @@ class SelfiesTransformerDecoder(nn.Module):
         # Latent to hidden projection
         self.latent_projection = nn.Linear(latent_dim, embedding_dim)
         
-        # Property conditioning: concatenate z and property embeddings, project down
-        self.property_fusion = nn.Linear(embedding_dim * 2, embedding_dim)
+        # FILM layers for property conditioning (best practice)
+        # Condition on properties by modulating feature statistics
+        self.film_layers = [
+            FILM(embedding_dim, embedding_dim)  # condition_dim = embedding_dim
+            for _ in range(num_layers)
+        ]
         
         # Transformer decoder layers
         self.decoder_layers = [
@@ -49,17 +53,7 @@ class SelfiesTransformerDecoder(nn.Module):
         
         # Project latent code to embedding dimension
         latent_embedding = self.latent_projection(z)  # [B, embedding_dim]
-        
-        # Add property conditioning if provided (CVAE best practice: concatenate)
-        if property_embedding is not None:
-            # Concatenate latent and property embeddings
-            latent_with_properties = mx.concatenate([latent_embedding, property_embedding], axis=-1)  # [B, embedding_dim*2]
-            # Project back down to embedding_dim
-            combined = self.property_fusion(latent_with_properties)
-        else:
-            combined = latent_embedding
-        
-        latent_embedding = mx.expand_dims(combined, axis=1)  # [B, 1, embedding_dim]
+        latent_embedding = mx.expand_dims(latent_embedding, axis=1)  # [B, 1, embedding_dim]
         
         # Token embedding + positional encoding
         embedded = self.token_embedding(input_seq)  # [B, T, embedding_dim]
@@ -72,10 +66,15 @@ class SelfiesTransformerDecoder(nn.Module):
         # Use latent embedding as "encoder output" for cross-attention
         encoder_output = mx.tile(latent_embedding, (1, seq_len, 1))  # [B, T, embedding_dim]
         
-        # Pass through transformer decoder layers
+        # Pass through transformer decoder layers with FILM conditioning
         decoder_output = embedded
-        for layer in self.decoder_layers:
+        for i, layer in enumerate(self.decoder_layers):
             decoder_output = layer(decoder_output, encoder_output)
+            
+            # Apply FILM conditioning if properties provided
+            if property_embedding is not None:
+                # Condition the decoder output with FILM (Feature-wise Linear Modulation)
+                decoder_output = self.film_layers[i](decoder_output, property_embedding)  # [B, T, embedding_dim]
         
         # Project to vocabulary
         logits = self.output_projection(decoder_output)

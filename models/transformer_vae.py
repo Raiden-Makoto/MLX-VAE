@@ -72,19 +72,21 @@ class SelfiesTransformerVAE(nn.Module):
         mu, logvar = self.encoder(input_seq)
         z = self.reparameterize(mu, logvar)
         
+        # Condition latent space on properties if provided (CVAE approach)
+        if properties is not None:
+            # Encode properties to latent space
+            property_latent = self.property_encoder(properties)  # [B, latent_dim]
+            # Concatenate encoder output with property conditioning, then fuse
+            combined = mx.concatenate([z, property_latent], axis=-1)  # [B, latent_dim*2]
+            z = self.latent_fusion(combined)  # [B, latent_dim]
+        
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
             noise = mx.random.normal(z.shape) * noise_std
             z = z + noise
         
-        # Get property embedding if provided (CVAE best practice)
-        if properties is not None:
-            property_embedding = self.property_encoder(properties)  # [B, embedding_dim]
-        else:
-            property_embedding = None
-        
-        # Decode from latent space with property conditioning
-        logits = self.decoder(z, input_seq, property_embedding)
+        # Decode from latent space
+        logits = self.decoder(z, input_seq)
         
         return logits, mu, logvar
 
@@ -102,16 +104,22 @@ class SelfiesTransformerVAE(nn.Module):
         
         # Create property embeddings
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
-        property_embedding = self.property_encoder(properties_array)  # [num_samples, embedding_dim]
+        property_latent = self.property_encoder(properties_array)  # [num_samples, latent_dim]
         
-        # Sample from prior N(0,1) - matches training where encoder learns q(z|x)
-        z = mx.random.normal((num_samples, self.latent_dim))
+        # Sample from learned distribution - the encoder learns to map to N(0,1) with KL
+        # During training: encoder(x) -> q(z|x,c), which after training should be p(z|c) ≈ N(0,1) 
+        # At inference: sample from p(z|c) which we approximate as N(0,1) conditioned on properties
+        base_z = mx.random.normal((num_samples, self.latent_dim))
         
-        # Decode with property conditioning (same as training)
-        samples = self._decode_conditional(z, property_embedding, temperature, top_k)
+        # Match training approach: use fusion layer to combine base_z and property_latent
+        combined = mx.concatenate([base_z, property_latent], axis=-1)
+        z = self.latent_fusion(combined)
+        
+        # Decode to generate molecules
+        samples = self._decode_conditional(z, temperature, top_k)
         return samples
 
-    def _decode_conditional(self, z, property_embedding, temperature, top_k):
+    def _decode_conditional(self, z, temperature, top_k):
         """Autoregressive decoding with property guidance"""
         batch_size = z.shape[0]
         START = 1
@@ -120,7 +128,7 @@ class SelfiesTransformerVAE(nn.Module):
         max_length = 50
         
         for _ in range(max_length - 1):
-            logits = self.decoder(z, seq, property_embedding)[:, -1, :]
+            logits = self.decoder(z, seq)[:, -1, :]
             
             # Apply top-k sampling
             if top_k > 0:
