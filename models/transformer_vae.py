@@ -83,8 +83,11 @@ class SelfiesTransformerVAE(nn.Module):
             z = z_structure
         
         # Add Gaussian noise during training for decoder robustness
+        # CRITICAL: After fusion, we need to ensure z is close to N(0,1) for inference consistency
         if training and noise_std > 0:
-            noise = mx.random.normal(z.shape) * noise_std
+            # Add strong noise to push fused z towards N(0,1) 
+            # This ensures training/inference match since inference uses N(0,1)
+            noise = mx.random.normal(z.shape) * max(noise_std, 0.5)  # At least 0.5 std
             z = z + noise
         
         # Decode from latent space
