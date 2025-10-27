@@ -27,21 +27,13 @@ class SelfiesTransformerVAE(nn.Module):
         )
         self.latent_dim = latent_dim
         
-        # Property conditioning layers
+        # Property conditioning layers - FILM architecture (best practice)
         self.num_properties = 2  # logp, tpsa
-        # Encode properties to latent space for conditioning
+        # Project properties to embedding_dim for FILM conditioning
         self.property_encoder = nn.Sequential(
             nn.Linear(self.num_properties, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, latent_dim)
-        )
-        
-        # Nonlinear fusion to combine encoder output with properties
-        # Use a 2-layer MLP for more expressive mixing
-        self.latent_fusion = nn.Sequential(
-            nn.Linear(latent_dim * 2, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, latent_dim)
+            nn.Linear(hidden_dim, embedding_dim)  # Output to embedding_dim for FILM
         )
         
         # Property normalization parameters (will be set from training)
@@ -72,21 +64,19 @@ class SelfiesTransformerVAE(nn.Module):
         mu, logvar = self.encoder(input_seq)
         z = self.reparameterize(mu, logvar)
         
-        # Condition latent space on properties if provided (CVAE approach)
-        if properties is not None:
-            # Encode properties to latent space
-            property_latent = self.property_encoder(properties)  # [B, latent_dim]
-            # Concatenate encoder output with property conditioning, then fuse
-            combined = mx.concatenate([z, property_latent], axis=-1)  # [B, latent_dim*2]
-            z = self.latent_fusion(combined)  # [B, latent_dim]
-        
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
             noise = mx.random.normal(z.shape) * noise_std
             z = z + noise
         
-        # Decode from latent space
-        logits = self.decoder(z, input_seq)
+        # Get property embedding for FILM conditioning (best practice)
+        if properties is not None:
+            property_embedding = self.property_encoder(properties)  # [B, embedding_dim]
+        else:
+            property_embedding = None
+        
+        # Decode from latent space with FILM conditioning
+        logits = self.decoder(z, input_seq, property_embedding)
         
         return logits, mu, logvar
 
@@ -102,24 +92,18 @@ class SelfiesTransformerVAE(nn.Module):
             norm_logp = target_logp
             norm_tpsa = target_tpsa
         
-        # Create property embeddings
+        # Create property embeddings for FILM conditioning
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
-        property_latent = self.property_encoder(properties_array)  # [num_samples, latent_dim]
+        property_embedding = self.property_encoder(properties_array)  # [num_samples, embedding_dim]
         
-        # Sample from learned distribution - the encoder learns to map to N(0,1) with KL
-        # During training: encoder(x) -> q(z|x,c), which after training should be p(z|c) ≈ N(0,1) 
-        # At inference: sample from p(z|c) which we approximate as N(0,1) conditioned on properties
-        base_z = mx.random.normal((num_samples, self.latent_dim))
+        # Sample from prior N(0,1) - matches training where encoder learns q(z|x)
+        z = mx.random.normal((num_samples, self.latent_dim))
         
-        # Match training approach: use fusion layer to combine base_z and property_latent
-        combined = mx.concatenate([base_z, property_latent], axis=-1)
-        z = self.latent_fusion(combined)
-        
-        # Decode to generate molecules
-        samples = self._decode_conditional(z, temperature, top_k)
+        # Decode with FILM conditioning
+        samples = self._decode_conditional(z, property_embedding, temperature, top_k)
         return samples
 
-    def _decode_conditional(self, z, temperature, top_k):
+    def _decode_conditional(self, z, property_embedding, temperature, top_k):
         """Autoregressive decoding with property guidance"""
         batch_size = z.shape[0]
         START = 1
@@ -128,7 +112,7 @@ class SelfiesTransformerVAE(nn.Module):
         max_length = 50
         
         for _ in range(max_length - 1):
-            logits = self.decoder(z, seq)[:, -1, :]
+            logits = self.decoder(z, seq, property_embedding)[:, -1, :]
             
             # Apply top-k sampling
             if top_k > 0:
