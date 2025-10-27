@@ -70,15 +70,17 @@ class SelfiesTransformerVAE(nn.Module):
         
         # Encode to latent space
         mu, logvar = self.encoder(input_seq)
-        z = self.reparameterize(mu, logvar)
+        z_structure = self.reparameterize(mu, logvar)
         
         # Condition latent space on properties if provided (CVAE approach)
         if properties is not None:
             # Encode properties to latent space
             property_latent = self.property_encoder(properties)  # [B, latent_dim]
-            # Concatenate encoder output with property conditioning, then fuse
-            combined = mx.concatenate([z, property_latent], axis=-1)  # [B, latent_dim*2]
+            # For training: use encoder output + property fusion
+            combined = mx.concatenate([z_structure, property_latent], axis=-1)  # [B, latent_dim*2]
             z = self.latent_fusion(combined)  # [B, latent_dim]
+        else:
+            z = z_structure
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
@@ -106,12 +108,9 @@ class SelfiesTransformerVAE(nn.Module):
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
         property_latent = self.property_encoder(properties_array)  # [num_samples, latent_dim]
         
-        # Sample from learned distribution - the encoder learns to map to N(0,1) with KL
-        # During training: encoder(x) -> q(z|x,c), which after training should be p(z|c) ≈ N(0,1) 
-        # At inference: sample from p(z|c) which we approximate as N(0,1) conditioned on properties
+        # Sample from prior N(0,1) and combine with property latent using fusion
+        # This matches training where encoder(x) + property goes through fusion
         base_z = mx.random.normal((num_samples, self.latent_dim))
-        
-        # Match training approach: use fusion layer to combine base_z and property_latent
         combined = mx.concatenate([base_z, property_latent], axis=-1)
         z = self.latent_fusion(combined)
         
