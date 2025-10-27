@@ -36,6 +36,14 @@ class SelfiesTransformerVAE(nn.Module):
             nn.Linear(hidden_dim, embedding_dim)  # Output to embedding_dim for FILM
         )
         
+        # Property prediction head (CVAE requirement)
+        # Predict properties from latent code z
+        self.property_predictor = nn.Sequential(
+            nn.Linear(latent_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, self.num_properties)  # Predict logp, tpsa
+        )
+        
         # Property normalization parameters (will be set from training)
         self.logp_mean = None
         self.logp_std = None
@@ -78,7 +86,10 @@ class SelfiesTransformerVAE(nn.Module):
         # Decode from latent space with FILM conditioning
         logits = self.decoder(z, input_seq, property_embedding)
         
-        return logits, mu, logvar
+        # Predict properties from latent code (for CVAE property loss)
+        predicted_properties = self.property_predictor(z)  # [B, 2]
+        
+        return logits, mu, logvar, predicted_properties
 
     def generate_conditional(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
         """Generate molecules with target LogP and TPSA values"""
