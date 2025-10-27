@@ -5,7 +5,7 @@ from models.transformer_encoder import SelfiesTransformerEncoder
 from models.transformer_decoder import SelfiesTransformerDecoder
 
 class SelfiesTransformerVAE(nn.Module):
-    """Transformer-based VAE for SELFIES generation"""
+    """Transformer-based VAE for SELFIES generation with property conditioning"""
     def __init__(
         self,
         vocab_size,
@@ -27,9 +27,17 @@ class SelfiesTransformerVAE(nn.Module):
         )
         self.latent_dim = latent_dim
         
-        # Property embedding for conditional generation
+        # Property conditioning layers
         self.num_properties = 2  # logp, tpsa
-        self.property_embedding = nn.Linear(self.num_properties, self.latent_dim)
+        # Encode properties to latent space for conditioning
+        self.property_encoder = nn.Sequential(
+            nn.Linear(self.num_properties, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)
+        )
+        
+        # Projection to combine encoder output with properties
+        self.latent_fusion = nn.Linear(latent_dim * 2, latent_dim)
         
         # Property normalization parameters (will be set from training)
         self.logp_mean = None
@@ -59,12 +67,13 @@ class SelfiesTransformerVAE(nn.Module):
         mu, logvar = self.encoder(input_seq)
         z = self.reparameterize(mu, logvar)
         
-        # Condition latent space on properties if provided
+        # Condition latent space on properties if provided (CVAE approach)
         if properties is not None:
-            # properties: [B, 2] - logp and tpsa
-            property_embedding = self.property_embedding(properties)  # [B, latent_dim]
-            # Property shifts the latent: keep structure from encoder, adjust by properties
-            z = z + property_embedding
+            # Encode properties to latent space
+            property_latent = self.property_encoder(properties)  # [B, latent_dim]
+            # Concatenate encoder output with property conditioning, then fuse
+            combined = mx.concatenate([z, property_latent], axis=-1)  # [B, latent_dim*2]
+            z = self.latent_fusion(combined)  # [B, latent_dim]
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
@@ -90,13 +99,15 @@ class SelfiesTransformerVAE(nn.Module):
         
         # Create property embeddings
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
-        property_latent = self.property_embedding(properties_array)  # [num_samples, latent_dim]
+        property_latent = self.property_encoder(properties_array)  # [num_samples, latent_dim]
         
-        # Sample from learned distribution then shift by properties
-        # Training: z = encoder(x) + property_embedding, so encoder(x) ~ N(0, I)
-        # Inference: Sample N(0,1) then shift by properties
+        # Sample from learned prior distribution then condition on properties
+        # Standard CVAE: sample from p(z|properties)
         base_z = mx.random.normal((num_samples, self.latent_dim))
-        z = base_z + property_latent
+        
+        # Concatenate base latent with property conditioning and fuse
+        combined = mx.concatenate([base_z, property_latent], axis=-1)  # [num_samples, latent_dim*2]
+        z = self.latent_fusion(combined)  # [num_samples, latent_dim]
         
         # Decode to generate molecules
         samples = self._decode_conditional(z, temperature, top_k)
