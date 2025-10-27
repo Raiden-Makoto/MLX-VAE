@@ -259,7 +259,7 @@ for epoch in range(start_epoch, total_epochs):
     
     for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss, property_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight)
+        total_loss, recon_loss, kl_loss, diversity_loss, property_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, property_weight=5.0)
         
         # Store losses
         epoch_losses.append(total_loss)
