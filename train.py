@@ -26,6 +26,7 @@ parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs t
 parser.add_argument('--max_beta', type=float, default=0.1, help='Maximum beta value')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
+parser.add_argument('--property_weight', type=float, default=2.0, help='Weight for property prediction loss')
 parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads')
 parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
@@ -259,7 +260,7 @@ for epoch in range(start_epoch, total_epochs):
     
     for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss, property_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, property_weight=5.0)
+        total_loss, recon_loss, kl_loss, diversity_loss, property_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight)
         
         # Store losses
         epoch_losses.append(total_loss)
