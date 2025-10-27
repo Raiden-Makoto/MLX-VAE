@@ -176,11 +176,20 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         # Weighted total loss
         total_loss = recon_loss + kl_loss + diversity_weight * diversity_loss + property_weight * property_loss
         
-        return total_loss, recon_loss, kl_loss, diversity_loss, property_loss
+        return total_loss
     
     # Compute loss and gradients
     loss, grads = mx.value_and_grad(loss_fn)(model)
-    total_loss, recon_loss, kl_loss, diversity_loss, property_loss = loss
+    
+    # Recompute for tracking (can't get individual losses from value_and_grad)
+    logits, mu, logvar, predicted_properties = model(batch_data, properties=batch_properties, training=False)
+    _, recon_loss, kl_loss, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
+    norm_logp = (batch_properties[:, 0] - model.logp_mean) / model.logp_std
+    norm_tpsa = (batch_properties[:, 1] - model.tpsa_mean) / model.tpsa_std
+    normalized_targets = mx.array([[norm_logp[i], norm_tpsa[i]] for i in range(batch_properties.shape[0])])
+    property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
+    
+    total_loss = loss
     
     # Clip gradients to prevent explosion
     def clip_grads(grads):
@@ -199,7 +208,7 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     # Update parameters
     optimizer.update(model, grads)
     
-    return total_loss.item(), recon_loss.item(), kl_loss.item(), diversity_loss.item()
+    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss
 
 # Beta annealing function
 def get_beta(epoch, total_epochs, warmup_epochs, max_beta):
