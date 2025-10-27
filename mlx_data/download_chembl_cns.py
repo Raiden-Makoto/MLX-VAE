@@ -78,7 +78,7 @@ except Exception as e:
 
 # Process molecules - no LogP filter
 print("Processing CNS molecules...")
-target_count = 20000  # Target for training (will continue from 10k)
+target_count = 15000  # Target: 15k molecules total
 processed = len(output_data)  # Start from existing count
 skipped = 0
 
