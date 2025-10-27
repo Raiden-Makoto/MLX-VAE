@@ -71,9 +71,9 @@ class SelfiesTransformerVAE(nn.Module):
         if properties is not None:
             # Encode properties to latent space
             property_latent = self.property_encoder(properties)  # [B, latent_dim]
-            # Concatenate encoder output with property conditioning, then fuse
-            combined = mx.concatenate([z, property_latent], axis=-1)  # [B, latent_dim*2]
-            z = self.latent_fusion(combined)  # [B, latent_dim]
+            # Use weighted combination: property dominates (90%), encoder output provides structure (10%)
+            # This allows properties to guide while maintaining molecule structure
+            z = 0.1 * z + 0.9 * property_latent
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
@@ -106,9 +106,9 @@ class SelfiesTransformerVAE(nn.Module):
         # At inference: sample from p(z|c) which we approximate as N(property_shift, I)
         # where property_shift is learned from training
         
-        # Sample from prior N(0,1) then let property dominate (90% property, 10% noise)
-        base_z = mx.random.normal((num_samples, self.latent_dim)) * 0.1
-        z = base_z + 0.9 * property_latent
+        # Match training approach: property dominates (90%), noise for diversity (10%)
+        base_z = mx.random.normal((num_samples, self.latent_dim))
+        z = 0.1 * base_z + 0.9 * property_latent
         
         # Alternatively: use fusion layer (but property should dominate)
         # combined = mx.concatenate([base_z, property_latent], axis=-1)
