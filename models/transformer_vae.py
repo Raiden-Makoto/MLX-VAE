@@ -36,8 +36,13 @@ class SelfiesTransformerVAE(nn.Module):
             nn.Linear(hidden_dim, latent_dim)
         )
         
-        # Projection to combine encoder output with properties
-        self.latent_fusion = nn.Linear(latent_dim * 2, latent_dim)
+        # Nonlinear fusion to combine encoder output with properties
+        # Use a 2-layer MLP for more expressive mixing
+        self.latent_fusion = nn.Sequential(
+            nn.Linear(latent_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)
+        )
         
         # Property normalization parameters (will be set from training)
         self.logp_mean = None

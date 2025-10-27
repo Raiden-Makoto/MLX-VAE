@@ -50,6 +50,9 @@ class SelfiesTransformerDecoder(nn.Module):
         # Token embedding + positional encoding
         embedded = self.token_embedding(input_seq)  # [B, T, embedding_dim]
         embedded = self.positional_encoding(embedded)
+        
+        # Add latent information to embeddings for stronger conditioning
+        embedded = embedded + mx.tile(latent_embedding, (1, seq_len, 1))
         embedded = self.dropout(embedded)
         
         # Use latent embedding as "encoder output" for cross-attention

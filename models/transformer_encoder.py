@@ -38,11 +38,15 @@ class SelfiesTransformerEncoder(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
     def masked_pool(self, x, mask):
-        """Pool sequence with attention mask"""
+        """Pool sequence with attention mask - improved attention-based pooling"""
         # x: [B, T, D], mask: [B, T]
         mask_expanded = mx.expand_dims(mask, axis=-1)  # [B, T, 1]
-        masked_x = x * mask_expanded
-        return mx.sum(masked_x, axis=1) / mx.sum(mask_expanded, axis=1)
+        # Compute attention scores from final hidden states
+        attention_scores = mx.sum(mx.tanh(x) * mask_expanded, axis=-1, keepdims=True)  # [B, T, 1]
+        attention_weights = mx.softmax(attention_scores, axis=1)  # [B, T, 1]
+        # Weighted average pooling
+        masked_x = x * mask_expanded * attention_weights
+        return mx.sum(masked_x, axis=1)
         
     def __call__(self, x):
         # x: [B, T] - input token sequences
