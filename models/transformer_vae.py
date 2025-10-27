@@ -101,13 +101,18 @@ class SelfiesTransformerVAE(nn.Module):
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
         property_latent = self.property_encoder(properties_array)  # [num_samples, latent_dim]
         
-        # Sample from learned prior distribution then condition on properties
-        # Standard CVAE: sample from p(z|properties)
+        # Sample from learned distribution - the encoder learns to map to N(0,1) with KL
+        # During training: encoder(x) -> q(z|x,c), which after training should be p(z|c) ≈ N(0,1) 
+        # At inference: sample from p(z|c) which we approximate as N(property_shift, I)
+        # where property_shift is learned from training
+        
+        # The fusion layer learns to combine base latent with properties
+        # Let's sample from latent prior and use property encoding to shift it
         base_z = mx.random.normal((num_samples, self.latent_dim))
         
-        # Concatenate base latent with property conditioning and fuse
-        combined = mx.concatenate([base_z, property_latent], axis=-1)  # [num_samples, latent_dim*2]
-        z = self.latent_fusion(combined)  # [num_samples, latent_dim]
+        # Concatenate and fuse (property latent shifts the base)
+        combined = mx.concatenate([base_z, property_latent], axis=-1)
+        z = self.latent_fusion(combined)
         
         # Decode to generate molecules
         samples = self._decode_conditional(z, temperature, top_k)
