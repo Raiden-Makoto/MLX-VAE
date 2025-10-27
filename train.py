@@ -271,7 +271,7 @@ for epoch in range(start_epoch, total_epochs):
             avg_loss = mx.mean(mx.array(epoch_losses)).item()
             avg_recon = mx.mean(mx.array(epoch_recon_losses)).item()
             avg_kl = mx.mean(mx.array(epoch_kl_losses)).item()
-            avg_prop = property_loss.item()
+            avg_prop = property_loss  # Already a float from stored_losses
             progress_bar.set_postfix({
                 'Loss': f'{avg_loss:.4f}',
                 'Recon': f'{avg_recon:.4f}',
