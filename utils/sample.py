@@ -11,7 +11,7 @@ sys.path.append(project_root)
 from models.transformer_vae import SelfiesTransformerVAE
 from utils.validate import batch_validate_selfies
 
-with open(os.path.join(project_root, 'mlx_data/cns_metadata.json')) as f:
+with open(os.path.join(project_root, 'mlx_data/chembl_cns_selfies.json')) as f:
     meta = json.load(f)
 
 token_to_idx = meta['token_to_idx']
@@ -51,19 +51,51 @@ def load_best_model(checkpoint_dir='checkpoints', **model_kwargs):
     if not os.path.exists(best_model_path):
         raise FileNotFoundError(f"Best model not found at {best_model_path}")
     
-    # Initialize model with default or provided parameters
-    default_kwargs = {
-        'vocab_size': vocab_size,
-        'embedding_dim': 128,
-        'hidden_dim': 256,
-        'latent_dim': 64
-    }
-    default_kwargs.update(model_kwargs)
+    # Load normalization stats and architecture params if available
+    norm_file = os.path.join(checkpoint_dir, 'property_norm.json')
+    if os.path.exists(norm_file):
+        import json
+        with open(norm_file, 'r') as f:
+            norm_stats = json.load(f)
+        
+        # Use architecture params from checkpoint if available
+        model_kwargs_from_checkpoint = {
+            'vocab_size': vocab_size,
+            'embedding_dim': norm_stats.get('embedding_dim', 128),
+            'hidden_dim': norm_stats.get('hidden_dim', 256),
+            'latent_dim': norm_stats.get('latent_dim', 64),
+            'num_heads': norm_stats.get('num_heads', 4),
+            'num_layers': norm_stats.get('num_layers', 4),
+            'dropout': norm_stats.get('dropout', 0.1)
+        }
+        # Override with any provided kwargs
+        model_kwargs_from_checkpoint.update(model_kwargs)
+        
+        model = SelfiesTransformerVAE(**model_kwargs_from_checkpoint)
+        model.set_property_normalization(
+            norm_stats['logp_mean'],
+            norm_stats['logp_std'],
+            norm_stats['tpsa_mean'],
+            norm_stats['tpsa_std']
+        )
+        print(f" Loaded property normalization stats")
+        print(f" Architecture: {norm_stats.get('num_layers', 4)} layers, {norm_stats.get('num_heads', 4)} heads")
+    else:
+        # Fallback to defaults if no metadata file
+        default_kwargs = {
+            'vocab_size': vocab_size,
+            'embedding_dim': 128,
+            'hidden_dim': 256,
+            'latent_dim': 64,
+            'num_heads': 4,
+            'num_layers': 4
+        }
+        default_kwargs.update(model_kwargs)
+        model = SelfiesTransformerVAE(**default_kwargs)
     
-    model = SelfiesTransformerVAE(**default_kwargs)
     model.load_weights(best_model_path)
     
-    print(f"✅ Loaded best model from: {best_model_path}")
+    print(f" Loaded best model from: {best_model_path}")
     return model
 
 def sample_from_vae(
@@ -163,7 +195,7 @@ if __name__ == "__main__":
     model = load_best_model(args.checkpoint_dir)
     
     # Generate samples
-    print(f"🎲 Generating {args.num_samples} molecules with temperature {args.temperature} and top_k {args.top_k}...")
+    print(f" Generating {args.num_samples} molecules with temperature {args.temperature} and top_k {args.top_k}...")
     samples = sample_from_vae(model, args.num_samples, args.temperature, args.top_k)
     
     # Convert to SELFIES strings
@@ -174,14 +206,14 @@ if __name__ == "__main__":
         for selfies in selfies_strings:
             f.write(selfies + '\n')
     
-    print(f"💾 Saved {len(selfies_strings)} molecules to {args.output_file}")
-    print(f"📝 First few samples:")
+    print(f" Saved {len(selfies_strings)} molecules to {args.output_file}")
+    print(f" First few samples:")
     for i, selfies in enumerate(selfies_strings[:5]):
         print(f"  {i+1}: {selfies}")
 
 def generate_conditional_molecules(model, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
     """Generate molecules with target LogP and TPSA values"""
-    print(f"🧬 Generating {num_samples} molecules with:")
+    print(f" Generating {num_samples} molecules with:")
     print(f"   LogP: {target_logp}")
     print(f"   TPSA: {target_tpsa}")
     
@@ -190,10 +222,10 @@ def generate_conditional_molecules(model, target_logp, target_tpsa, num_samples=
     
     # Convert to SELFIES
     selfies_list = tokens_to_selfies(samples)
-    print(f"✅ Generated {len(selfies_list)} SELFIES sequences")
+    print(f" Generated {len(selfies_list)} SELFIES sequences")
     
     # Validate molecules
-    print("🔍 Validating generated molecules...")
+    print(" Validating generated molecules...")
     validation_results = batch_validate_selfies(selfies_list, verbose=False)
     
     # Filter valid molecules
@@ -210,7 +242,7 @@ def generate_conditional_molecules(model, target_logp, target_tpsa, num_samples=
                 'sas': result.get('sas', 0)
             })
     
-    print(f"✅ {len(valid_molecules)} valid molecules generated")
+    print(f" {len(valid_molecules)} valid molecules generated")
     return valid_molecules
 
 def analyze_logp_tpsa_accuracy(molecules, target_logp, target_tpsa):
@@ -222,7 +254,7 @@ def analyze_logp_tpsa_accuracy(molecules, target_logp, target_tpsa):
     tpsa_values = [m.get('tpsa', 0) for m in molecules if 'tpsa' in m and m['tpsa'] > 0]
     
     if not logp_values or not tpsa_values:
-        print("❌ No valid property values to analyze")
+        print(" No valid property values to analyze")
         return {}
     
     logp_mean = sum(logp_values) / len(logp_values)
@@ -231,7 +263,7 @@ def analyze_logp_tpsa_accuracy(molecules, target_logp, target_tpsa):
     logp_error = abs(logp_mean - target_logp)
     tpsa_error = abs(tpsa_mean - target_tpsa)
     
-    print(f"\n📊 CONDITIONAL GENERATION ANALYSIS")
+    print(f"\n CONDITIONAL GENERATION ANALYSIS")
     print(f"=" * 40)
     print(f"Target LogP: {target_logp:.2f}")
     print(f"Generated LogP: {logp_mean:.2f} ± {logp_error:.2f}")

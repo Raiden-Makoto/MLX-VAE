@@ -26,45 +26,68 @@ parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs t
 parser.add_argument('--max_beta', type=float, default=0.1, help='Maximum beta value')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
-parser.add_argument('--num_heads', type=int, default=8, help='Number of attention heads')
-parser.add_argument('--num_layers', type=int, default=6, help='Number of transformer layers')
+parser.add_argument('--property_weight', type=float, default=10.0, help='Weight for property prediction loss (CVAE requires high weight)')
+parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads (FIXED at 4)')
+parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers (FIXED at 4)')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (epochs without improvement)')
 parser.add_argument('--val_freq', type=int, default=5, help='Validate every N epochs')
 
 # Load data and metadata
-with open('mlx_data/cns_metadata.json', 'r') as f:
+with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
     meta = json.load(f)
 
-tokenized = np.load('mlx_data/cns_tokenized.npy')
+tokenized = np.load('mlx_data/chembl_cns_tokenized.npy')
 token_to_idx = meta['token_to_idx']
 idx_to_token = meta['idx_to_token']
 vocab_size = meta['vocab_size']
 max_length = meta['max_length']
 
-# Load properties for conditional training
-logp_values = meta['logp_values']
-tpsa_values = meta['tpsa_values']
-properties = [[logp, tpsa] for logp, tpsa in zip(logp_values, tpsa_values)]
+# Load properties and normalize
+molecules = meta['molecules']
+properties_raw = np.array([[mol['logp'], mol['tpsa']] for mol in molecules], dtype=np.float32)
+
+# Normalize properties (zero mean, unit variance)
+logp_mean = np.mean(properties_raw[:, 0])
+logp_std = np.std(properties_raw[:, 0])
+tpsa_mean = np.mean(properties_raw[:, 1])
+tpsa_std = np.std(properties_raw[:, 1])
+
+properties = np.array([
+    [(prop[0] - logp_mean) / logp_std, (prop[1] - tpsa_mean) / tpsa_std]
+    for prop in properties_raw
+], dtype=np.float32)
 
 args = parser.parse_args()
 
-# Prepare data with train/val split
+# ENFORCE 4 LAYERS 4 HEADS - NEVER CHANGE THIS
+args.num_layers = 4
+args.num_heads = 4
+
+# Prepare data
 tokenized_mx = mx.array(tokenized)
 properties_mx = mx.array(properties)
 
-# Split into train/val (90/10)
-(train_tokens, train_properties), (val_tokens, val_properties) = split_train_val(
-    tokenized_mx, properties_mx, val_ratio=0.1, shuffle=True
-)
+# Use create_batches from dataloader, but pair with properties
+from mlx_data.dataloader import create_batches
 
-# Create batches
-train_batches = create_batches(train_tokens, train_properties, args.batch_size, shuffle=True)
-val_batches = create_batches(val_tokens, val_properties, args.batch_size, shuffle=False)
+# Shuffle data and properties together
+if True:  # Always shuffle
+    n_samples = tokenized_mx.shape[0]
+    indices = mx.random.permutation(mx.arange(n_samples))
+    tokenized_mx = tokenized_mx[indices]
+    properties_mx = properties_mx[indices]
 
-print(f"📊 Data split: {len(train_tokens)} train, {len(val_tokens)} val")
-print(f"📦 Batches: {len(train_batches)} train, {len(val_batches)} val")
+# Create batches using existing function
+batches_data = create_batches(tokenized_mx, args.batch_size, shuffle=False)  # Already shuffled above
+
+# Pair batches with properties
+batches = []
+for batch_data in batches_data:
+    # Get corresponding properties
+    batch_properties = properties_mx[len(batches) * args.batch_size:(len(batches) + 1) * args.batch_size]
+    batches.append((batch_data, batch_properties))
 
 # Initialize model and optimizer
 print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
@@ -79,6 +102,9 @@ model = SelfiesTransformerVAE(
     num_layers=args.num_layers,
     dropout=args.dropout
 )
+
+# Set property normalization
+model.set_property_normalization(logp_mean, logp_std, tpsa_mean, tpsa_std)
 optimizer = Adam(learning_rate=args.learning_rate)
 
 # Create output directory
@@ -87,7 +113,7 @@ os.makedirs(args.output_dir, exist_ok=True)
 # Resume from best model if specified
 start_epoch = 0
 if args.resume:
-    print(f"🔄 Resuming training...")
+    print(f"Resuming training...")
     
     # Load last epoch from text file
     last_epoch_file = os.path.join(args.output_dir, 'last_epoch.txt')
@@ -95,20 +121,29 @@ if args.resume:
         with open(last_epoch_file, 'r') as f:
             last_completed_epoch = int(f.read().strip())
             start_epoch = last_completed_epoch + 1  # Resume from next epoch
-        print(f"📅 Resuming from epoch {start_epoch} (last completed: {last_completed_epoch})")
+        print(f"Resuming from epoch {start_epoch} (last completed: {last_completed_epoch})")
     else:
         print("No last_epoch.txt found, starting from epoch 1")
     
     # Load best model weights if available
     best_model_path = os.path.join(args.output_dir, 'best_model.npz')
     if os.path.exists(best_model_path):
-        print(f"🏆 Loading best model weights from: {best_model_path}")
+        print(f"Loading best model weights from: {best_model_path}")
         model.load_weights(best_model_path)
+        # Also load normalization stats if available
+        norm_file = os.path.join(args.output_dir, 'property_norm.json')
+        if os.path.exists(norm_file):
+            import json
+            with open(norm_file, 'r') as f:
+                norm_stats = json.load(f)
+            model.set_property_normalization(
+                norm_stats['logp_mean'],
+                norm_stats['logp_std'],
+                norm_stats['tpsa_mean'],
+                norm_stats['tpsa_std']
+            )
     else:
-        print("❌ No best_model.npz found, starting from scratch...")
-
-print(f"Initialized model and optimizer")
-print(f"Checkpoints will be saved to: {args.output_dir}")
+        print("No best_model.npz found, starting from scratch...")
 
 # Best model tracking and early stopping
 best_loss = float('inf')
@@ -117,17 +152,56 @@ patience_counter = 0
 last_val_loss = float('inf')
 
 # Training function
-def train_step(model, batch_data, optimizer, beta, noise_std=0.05, diversity_weight=0.01):
-    """Single training step with conditional properties"""
-    batch, properties = batch_data  # Unpack batch and properties
+def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01, property_weight=1.0):
+    """Single training step"""
+    # Store losses for access after computation
+    stored_losses = {}
     
     def loss_fn(model):
-        logits, mu, logvar = model(batch, properties=properties, training=True, noise_std=noise_std)
-        return compute_loss(batch, logits, mu, logvar, beta, diversity_weight)
+        result = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
+        logits, mu, logvar, predicted_properties, property_kl_mu, property_kl_logvar = result
+        
+        # Get reconstruction, KL, and diversity losses
+        _, recon_loss, kl_loss, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
+        
+        # Property prediction loss (CVAE requirement)
+        # Normalize targets
+        norm_logp = (batch_properties[:, 0] - model.logp_mean) / model.logp_std
+        norm_tpsa = (batch_properties[:, 1] - model.tpsa_mean) / model.tpsa_std
+        normalized_targets = mx.array([[norm_logp[i], norm_tpsa[i]] for i in range(batch_properties.shape[0])])
+        
+        # MSE loss between predicted and target properties
+        property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
+        
+        # Property-conditioned KL divergence (CVAE best practice)
+        # KL(q(z|properties) || N(0,1)) to regularize property-conditioned latent
+        if property_kl_mu is not None and property_kl_logvar is not None:
+            # Standard KL divergence formula
+            property_kl = -0.5 * mx.sum(1 + property_kl_logvar - property_kl_mu**2 - mx.exp(property_kl_logvar), axis=1)
+            property_kl = mx.mean(property_kl)
+        else:
+            property_kl = mx.array(0.0)
+        
+        # Store losses for later (evaluate immediately)
+        stored_losses['recon'] = float(recon_loss.item())
+        stored_losses['kl'] = float(kl_loss.item())
+        stored_losses['diversity'] = float(diversity_loss.item())
+        stored_losses['property'] = float(property_loss.item())
+        stored_losses['property_kl'] = float(property_kl.item())
+        
+        # Weighted total loss with property KL
+        total_loss = recon_loss + kl_loss + diversity_weight * diversity_loss + property_weight * property_loss + 0.01 * property_kl
+        
+        return total_loss
     
     # Compute loss and gradients
     loss, grads = mx.value_and_grad(loss_fn)(model)
-    total_loss, recon_loss, kl_loss, diversity_loss = loss
+    
+    total_loss = loss
+    recon_loss = stored_losses['recon']
+    kl_loss = stored_losses['kl']
+    diversity_loss = stored_losses['diversity']
+    property_loss = stored_losses['property']
     
     # Clip gradients to prevent explosion
     def clip_grads(grads):
@@ -146,7 +220,7 @@ def train_step(model, batch_data, optimizer, beta, noise_std=0.05, diversity_wei
     # Update parameters
     optimizer.update(model, grads)
     
-    return total_loss.item(), recon_loss.item(), kl_loss.item(), diversity_loss.item()
+    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss
 
 # Validation function
 def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
@@ -200,11 +274,8 @@ else:
     print(f"Training model for {total_epochs} epochs")
 print(f"Batch size: {args.batch_size}, Learning rate: {args.learning_rate}")
 print(f"Beta warmup: {args.beta_warmup_epochs} epochs, Max beta: {args.max_beta}")
-print(f"Latent noise std: {args.latent_noise_std}")
 print(f"Diversity weight: {args.diversity_weight}")
-print(f"Validation frequency: every {args.val_freq} epochs")
-print(f"Early stopping patience: {args.patience} validation checks")
-print(f"Total batches per epoch: {len(train_batches)} train, {len(val_batches)} val")
+print(f"Property weight: {args.property_weight}")
 print("="*67)
 
 for epoch in range(start_epoch, total_epochs):
@@ -223,9 +294,9 @@ for epoch in range(start_epoch, total_epochs):
         leave=False
     )
     
-    for batch_idx, batch in enumerate(progress_bar):
+    for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss = train_step(model, batch, optimizer, current_beta, args.latent_noise_std, args.diversity_weight)
+        total_loss, recon_loss, kl_loss, diversity_loss, property_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight)
         
         # Store losses
         epoch_losses.append(total_loss)
@@ -237,10 +308,12 @@ for epoch in range(start_epoch, total_epochs):
             avg_loss = mx.mean(mx.array(epoch_losses)).item()
             avg_recon = mx.mean(mx.array(epoch_recon_losses)).item()
             avg_kl = mx.mean(mx.array(epoch_kl_losses)).item()
+            avg_prop = property_loss  # Already a float from stored_losses
             progress_bar.set_postfix({
                 'Loss': f'{avg_loss:.4f}',
                 'Recon': f'{avg_recon:.4f}',
-                'KL': f'{avg_kl:.4f}'
+                'KL': f'{avg_kl:.4f}',
+                'Prop': f'{avg_prop:.4f}'
             })
     
     # Calculate final epoch metrics
@@ -248,31 +321,28 @@ for epoch in range(start_epoch, total_epochs):
     final_recon = mx.mean(mx.array(epoch_recon_losses)).item()
     final_kl = mx.mean(mx.array(epoch_kl_losses)).item()
     
-    print(f"📊 Epoch {epoch+1} Results:")
-    print(f"  Train Loss: {final_loss:.4f} (Recon: {final_recon:.4f}, KL: {final_kl:.4f})")
-    
-    # Validation every N epochs (including epoch 0)
-    should_validate = epoch == 0 or (epoch + 1) % args.val_freq == 0 or epoch == total_epochs - 1
-    
-    if should_validate:
-        val_loss, val_recon, val_kl, val_diversity = validate(model, val_batches, current_beta, args.latent_noise_std, args.diversity_weight)
-        print(f"  Val Loss: {val_loss:.4f} (Recon: {val_recon:.4f}, KL: {val_kl:.4f})")
-        
-        # Early stopping logic
-        if val_loss < best_loss:
-            best_loss = val_loss
-            model.save_weights(best_model_path)
-            patience_counter = 0
-            print(f"🏆 New best model! Val Loss: {val_loss:.4f} -> Saved to {best_model_path}")
-        else:
-            patience_counter += 1
-            print(f"Best val loss so far: {best_loss:.4f} (patience: {patience_counter}/{args.patience})")
-            
-            # Early stopping check
-            if patience_counter >= args.patience:
-                print(f"🛑 Early stopping! No improvement for {args.patience} validation checks.")
-                print(f"Best validation loss: {best_loss:.4f}")
-                break
+    # Save best model if this is the best loss so far
+    if final_loss < best_loss:
+        best_loss = final_loss
+        model.save_weights(best_model_path)
+        # Also save normalization stats and architecture params
+        import json
+        norm_stats = {
+            'logp_mean': float(logp_mean),
+            'logp_std': float(logp_std),
+            'tpsa_mean': float(tpsa_mean),
+            'tpsa_std': float(tpsa_std),
+            # Save architecture parameters to ensure consistent loading
+            'embedding_dim': args.embedding_dim,
+            'hidden_dim': args.hidden_dim,
+            'latent_dim': args.latent_dim,
+            'num_heads': args.num_heads,
+            'num_layers': args.num_layers,
+            'dropout': args.dropout
+        }
+        with open(f'{args.output_dir}/property_norm.json', 'w') as f:
+            json.dump(norm_stats, f)
+        print(f"New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
     else:
         print(f"  Skipping validation (next validation at epoch {((epoch + 1) // args.val_freq + 1) * args.val_freq})")
     
@@ -289,4 +359,4 @@ for epoch in range(start_epoch, total_epochs):
     with open(last_epoch_file, 'w') as f:
         f.write(str(epoch))
 
-print("🎉 Training completed!")
+print("Training completed!")

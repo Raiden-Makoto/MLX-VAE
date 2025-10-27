@@ -5,7 +5,7 @@ import os
 def get_pad_token():
     try:
         import json
-        with open('mlx_data/qm9_cns_selfies.json') as f:
+        with open('mlx_data/chembl_cns_selfies.json') as f:
             meta = json.load(f)
         return meta['token_to_idx']['<PAD>']
     except:

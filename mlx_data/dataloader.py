@@ -10,45 +10,14 @@ from rdkit import Chem
 from rdkit.Chem import Descriptors, Crippen
 import mlx.core as mx
 
-def load_cns_dataset():
-    """Load the cleaned CNS dataset"""
-    with open('mlx_data/cns_final_dataset.json', 'r') as f:
-        data = json.load(f)
-    
-    print(f"📊 Loaded {len(data)} CNS molecules")
-    return data
+with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
+    meta = json.load(f)
 
-def create_vocabulary(data):
-    """Create vocabulary from SELFIES strings"""
-    print("🔤 Creating vocabulary...")
-    
-    all_tokens = set()
-    max_length = 0
-    
-    for entry in data:
-        selfies_str = entry['selfies']
-        tokens = selfies_str.split('][')
-        # Clean up tokens
-        tokens = [token.strip('[]') for token in tokens]
-        tokens = ['[' + token + ']' for token in tokens if token]
-        
-        all_tokens.update(tokens)
-        max_length = max(max_length, len(tokens))
-    
-    # Add special tokens
-    all_tokens.add('[PAD]')
-    all_tokens.add('[START]')
-    all_tokens.add('[END]')
-    
-    # Create mappings
-    token_to_idx = {token: idx for idx, token in enumerate(sorted(all_tokens))}
-    idx_to_token = {idx: token for token, idx in token_to_idx.items()}
-    vocab_size = len(all_tokens)
-    
-    print(f"📚 Vocabulary size: {vocab_size}")
-    print(f"📏 Max sequence length: {max_length}")
-    
-    return token_to_idx, idx_to_token, vocab_size, max_length
+tokenized = np.load('mlx_data/chembl_cns_tokenized.npy')
+token_to_idx = meta['token_to_idx']
+idx_to_token = meta['idx_to_token']
+vocab_size = meta['vocab_size']
+max_length = meta['max_length']
 
 def tokenize_selfies(data, token_to_idx, max_length):
     """Tokenize SELFIES strings"""
@@ -100,69 +69,5 @@ def create_batches(tokenized_mx, properties_mx, batch_size, shuffle=True):
     
     return batches
 
-def split_train_val(tokenized_mx, properties_mx, val_ratio=0.1, shuffle=True):
-    """Split data into training and validation sets"""
-    num_samples = len(tokenized_mx)
-    indices = np.arange(num_samples)
-    
-    if shuffle:
-        np.random.shuffle(indices)
-    
-    split_idx = int(num_samples * (1 - val_ratio))
-    train_indices = indices[:split_idx]
-    val_indices = indices[split_idx:]
-    
-    # Convert to lists for MLX indexing
-    train_indices_list = train_indices.tolist()
-    val_indices_list = val_indices.tolist()
-    
-    train_tokens = tokenized_mx[train_indices_list]
-    train_properties = properties_mx[train_indices_list]
-    
-    val_tokens = tokenized_mx[val_indices_list]
-    val_properties = properties_mx[val_indices_list]
-    
-    return (train_tokens, train_properties), (val_tokens, val_properties)
-
-def save_metadata(token_to_idx, idx_to_token, vocab_size, max_length, properties):
-    """Save metadata for inference"""
-    metadata = {
-        'token_to_idx': token_to_idx,
-        'idx_to_token': idx_to_token,
-        'vocab_size': vocab_size,
-        'max_length': max_length,
-        'logp_values': properties[:, 0].tolist(),
-        'tpsa_values': properties[:, 1].tolist()
-    }
-    
-    with open('mlx_data/cns_metadata.json', 'w') as f:
-        json.dump(metadata, f, indent=2)
-    
-    print("💾 Metadata saved to mlx_data/cns_metadata.json")
-
-def main():
-    """Main data processing function"""
-    print("🧬 PROCESSING CNS DATASET")
-    print("========================")
-    
-    # Load dataset
-    data = load_cns_dataset()
-    
-    # Create vocabulary
-    token_to_idx, idx_to_token, vocab_size, max_length = create_vocabulary(data)
-    
-    # Tokenize
-    tokenized, properties = tokenize_selfies(data, token_to_idx, max_length)
-    
-    # Save tokenized data
-    np.save('mlx_data/cns_tokenized.npy', tokenized)
-    print("💾 Tokenized data saved to mlx_data/cns_tokenized.npy")
-    
-    # Save metadata
-    save_metadata(token_to_idx, idx_to_token, vocab_size, max_length, properties)
-    
-    print("✅ Data processing complete!")
-    print(f"📊 Ready for training with {len(data)} molecules")
-
-if __name__ == "__main__":
-    main()
+# Create batches
+batches = create_batches(tokenized_mx, BATCH_SIZE, shuffle=True)

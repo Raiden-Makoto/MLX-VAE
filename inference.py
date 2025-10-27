@@ -26,7 +26,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 def load_data():
     """Load vocabulary and metadata"""
-    with open('mlx_data/cns_metadata.json', 'r') as f:
+    with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
         meta = json.load(f)
     return meta['token_to_idx'], meta['idx_to_token'], meta['vocab_size']
 
@@ -34,21 +34,14 @@ def load_dataset_smiles():
     """Load SMILES from the training dataset"""
     try:
         # Load from the CNS dataset
-        with open('mlx_data/cns_final_dataset.json', 'r') as f:
-            data = json.load(f)
-        
-        # Convert SELFIES to SMILES
-        smiles_list = []
-        for entry in data:
-            try:
-                selfies_str = entry['selfies']
-                smiles = decoder(selfies_str)
-                smiles_list.append(smiles)
-            except:
-                continue
-        
-        print(f"Loaded {len(smiles_list)} SMILES from CNS dataset")
-        return smiles_list
+        with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
+            meta = json.load(f)
+        molecules = meta.get('molecules', [])
+        if molecules and isinstance(molecules[0], dict) and 'smiles' in molecules[0]:
+            return [mol['smiles'] for mol in molecules]
+        else:
+            print(f"No SMILES found in dataset")
+            return None
     except FileNotFoundError:
         print("CNS dataset not found, skipping diversity calculation")
         return None
@@ -100,13 +93,13 @@ def calculate_diversity_metrics(df):
 
 def validate_molecules(selfies_list):
     """Validate generated molecules and convert to SMILES"""
-    print(f"🔍 Validating {len(selfies_list)} molecules...")
+    print(f" Validating {len(selfies_list)} molecules...")
     
     # Validate and convert to SMILES (includes filtering)
     results = batch_validate_selfies(selfies_list)
     
     if not results:
-        print("❌ No valid molecules generated!")
+        print(" No valid molecules generated!")
         return None
     
     # Create DataFrame
@@ -121,7 +114,7 @@ def validate_molecules(selfies_list):
 
 def visualize_molecules(df, max_molecules=20):
     """Create visualizations of the generated molecules"""
-    print(f"🎨 Creating visualizations for {len(df)} molecules...")
+    print(f" Creating visualizations for {len(df)} molecules...")
     
     # Create molecule grid
     fig = create_molecule_grid(df, max_molecules=max_molecules)
@@ -129,7 +122,7 @@ def visualize_molecules(df, max_molecules=20):
         fig.savefig('output/molecule_grid.png', dpi=300, bbox_inches='tight')
         print("Saved molecule grid to output/molecule_grid.png")
     else:
-        print("❌ Could not create molecule grid visualization")
+        print(" Could not create molecule grid visualization")
 
     # Create property distributions
     try:
@@ -138,9 +131,9 @@ def visualize_molecules(df, max_molecules=20):
             prop_fig.savefig('output/property_distributions.png', dpi=300, bbox_inches='tight')
             print("Saved property distributions to output/property_distributions.png")
         else:
-            print("❌ Could not create property distributions visualization")
+            print(" Could not create property distributions visualization")
     except Exception as e:
-        print(f"❌ Error creating property distributions: {e}")
+        print(f" Error creating property distributions: {e}")
 
 def save_results(df, output_file='output/generation_results.csv'):
     """Save validation results to CSV"""
@@ -166,10 +159,10 @@ def main():
     # Conditional generation arguments (DEFAULT)
     parser.add_argument('--regular', action='store_true',
                        help='Use regular generation instead of conditional')
-    parser.add_argument('--logp', type=float, default=0.3,
-                        help='Target LogP value for conditional generation (default: 0.3, dataset median)')
-    parser.add_argument('--tpsa', type=float, default=35.5,
-                        help='Target TPSA value for conditional generation (default: 35.5, dataset median)')
+    parser.add_argument('--logp', type=float, default=3.19,
+                       help='Target LogP value for conditional generation (default: 3.19)')
+    parser.add_argument('--tpsa', type=float, default=82.49,
+                       help='Target TPSA value for conditional generation (default: 82.49)')
     parser.add_argument('--analyze', action='store_true', default=True,
                        help='Analyze conditional generation accuracy (default: True)')
     
@@ -180,27 +173,27 @@ def main():
     
     # Check if regular generation is requested (conditional is DEFAULT)
     if args.regular:
-        print("🚀 Starting molecule generation and analysis pipeline...")
+        print(" Starting molecule generation and analysis pipeline...")
         print("="*60)
         
         # Load model
-        print("📥 Loading model...")
+        print(" Loading model...")
         model = load_best_model(args.checkpoint)
-        print(f"✅ Loaded model from {args.checkpoint}")
+        print(f" Loaded model from {args.checkpoint}")
         
         # Generate molecules
         samples = sample_from_vae(model, args.num_samples, args.temperature, args.top_k)
         selfies_list = tokens_to_selfies(samples)
     
         if not selfies_list:
-            print("❌ No molecules generated. Exiting.")
+            print(" No molecules generated. Exiting.")
             return
         
         # Validate molecules
         df = validate_molecules(selfies_list)
         
         if df is None:
-            print("❌ No valid molecules found. Exiting.")
+            print(" No valid molecules found. Exiting.")
             return
         
         # Save results
@@ -213,11 +206,11 @@ def main():
         visualize_molecules(df, args.max_visualize)
         
         print("="*60)
-        print("🎉 Pipeline completed successfully!")
+        print(" Pipeline completed successfully!")
         
     else:
         # CONDITIONAL GENERATION (DEFAULT)
-        print("🧬 CONDITIONAL MOLECULAR GENERATION")
+        print(" CONDITIONAL MOLECULAR GENERATION")
         print("="*50)
         print(f"Target LogP: {args.logp}")
         print(f"Target TPSA: {args.tpsa}")
@@ -227,9 +220,9 @@ def main():
         print()
         
         # Load model
-        print("📥 Loading model...")
+        print(" Loading model...")
         model = load_best_model(args.checkpoint)
-        print("✅ Model loaded successfully!")
+        print(" Model loaded successfully!")
         print()
         
         # Generate conditional molecules
@@ -239,14 +232,14 @@ def main():
         )
         
         if not molecules:
-            print("❌ No valid molecules generated!")
+            print(" No valid molecules generated!")
             return
         
-        print(f"✅ Generated {len(molecules)} valid molecules")
+        print(f" Generated {len(molecules)} valid molecules")
         
         # Analyze accuracy (default behavior)
         if args.analyze:
-            print("\n📊 Analyzing conditional generation accuracy...")
+            print("\n Analyzing conditional generation accuracy...")
             analyze_logp_tpsa_accuracy(molecules, args.logp, args.tpsa)
         
         # Convert to DataFrame for consistent processing
@@ -262,7 +255,7 @@ def main():
         visualize_molecules(df, args.max_visualize)
         
         print("="*60)
-        print("🎉 Conditional generation completed!")
+        print(" Conditional generation completed!")
 
 if __name__ == "__main__":
     main()

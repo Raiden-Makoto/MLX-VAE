@@ -39,7 +39,7 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 - **FiLM-Conditioned Training**: Dataset includes LogP and TPSA values for sophisticated property learning
 
 ### Molecular Validation & Filtering
-- **Chemical Stability Filtering**: Removes peroxides, small rings, azides, and hypervalent atoms
+- **Chemical Stability Filtering**: Removes peroxides, small rings, and azides
 - **Synthetic Accessibility (SA_Score)**: Filters molecules based on synthetic feasibility
 - **Drug-likeness (QED)**: Evaluates molecules for drug-like properties
 - **Conformational Strain**: Removes molecules with high strain energy (>100 kcal/mol)
@@ -58,41 +58,35 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 ## 🏗️ Architecture
 
 ```
-Input SELFIES → Transformer Encoder → Latent Space (μ, σ) → Property Embedding → Transformer Decoder → Generated SELFIES
+Input SELFIES → Transformer Encoder → Latent (μ, σ) → Reparameterization → [Latent + Property Encoder] → Fusion Layer → Decoder → Generated SELFIES
+                    ↑                                                      ↑
+             Properties (LogP, TPSA)  →   Property Encoder (2-layer MLP) ─┘
                                                       ↓
                                               Comprehensive Filtering
-                                                      ↓
-                                    Stable, Synthesizable Molecules
+                    ↓
+       Stable, Synthesizable, Property-Controlled Molecules
 ```
 
-### FiLM-Conditioned Generation Flow
-```
-Target Properties (LogP, TPSA) → FiLM Layers (γ, β) → Latent Modulation → Conditional Sampling → Property-Controlled Molecules
-```
+### Conditional VAE (CVAE) Architecture
 
-### Mathematical Formulation
+The model implements a **Conditional VAE** that learns p(x|c) where c are the molecular properties (LogP, TPSA):
 
-The VAE learns to model the molecular distribution $p(x)$ by maximizing the Evidence Lower Bound (ELBO):
-
-$$\mathcal{L}(\theta, \phi) = \mathbb{E}_{q_\phi(z|x)}[\log p_\theta(x|z)] - \beta \cdot D_{KL}(q_\phi(z|x) || p(z)) + \lambda_{div} \cdot \mathcal{L}_{div} + \lambda_{info} \cdot \mathcal{L}_{info}$$
+$$\mathcal{L}(\theta, \phi) = \mathbb{E}_{q_\phi(z|x,c)}[\log p_\theta(x|z,c)] - \beta \cdot D_{KL}(q_\phi(z|x,c) || p(z|c)) + \lambda_{div} \cdot \mathcal{L}_{div}$$
 
 Where:
-- $q_\phi(z|x)$: Encoder (approximate posterior)
-- $p_\theta(x|z)$: Decoder (likelihood)
-- $p(z) = \mathcal{N}(0, I)$: Prior distribution
-- $\beta$: KL annealing weight with free bits
-- $\mathcal{L}_{div}$: Diversity loss for molecular variety
-- $\mathcal{L}_{info}$: Information regularization loss
+- $q_\phi(z|x,c)$: Encoder (conditional posterior)
+- $p_\theta(x|z,c)$: Decoder (conditional likelihood)  
+- $p(z|c)$: Conditional prior distribution
+- $c$: Properties (normalized LogP, TPSA)
 
 ### Components
 
-- **Encoder**: $h = \text{TransformerEncoder}(x) \rightarrow \mu, \log\sigma = \text{Linear}(\text{LayerNorm}(\text{Dropout}(h)))$
-- **FiLM Layers**: $\gamma, \beta = \text{FiLM}([\text{LogP}, \text{TPSA}]) \rightarrow \mathbb{R}^{d_{latent}}$
-- **Reparameterization**: $z = \mu + \sigma \odot \epsilon, \epsilon \sim \mathcal{N}(0, I)$
-- **FiLM Conditioning**: $z_{conditioned} = \gamma \odot z + \beta$ (feature-wise modulation)
-- **Decoder**: $\hat{x} = \text{TransformerDecoder}(z_{conditioned}) \rightarrow \text{VocabProjection}(\text{LayerNorm}(\text{Dropout}(\hat{x})))$
-- **Loss**: $\mathcal{L} = \text{CrossEntropy}(x, \hat{x}) + \beta \cdot \max(D_{KL} - \tau, 0) + \lambda_{div} \cdot \mathcal{L}_{div} + \lambda_{info} \cdot \mathcal{L}_{info}$
-- **Sampling**: Top-K filtering with temperature scaling
+- **Transformer Encoder**: Multi-head self-attention → sequence pooling → $\mu, \log\sigma$
+- **Property Encoder**: 2-layer MLP: `Linear(properties) → ReLU → Linear` → property latent
+- **Latent Fusion**: Concatenate [encoder latent, property latent] → `Linear(2×latent_dim → latent_dim)`
+- **Reparameterization**: $z = \mu + \sigma \odot \epsilon, \epsilon \sim \mathcal{N}(0, I)$ → then fuse with properties
+- **Transformer Decoder**: Cross-attention to fused latent → autoregressive generation
+- **Conditional Generation**: Sample $z \sim \mathcal{N}(0, I)$, encode properties, fuse, decode
 
 ## 🔬 Molecular Analysis Pipeline
 
@@ -110,44 +104,39 @@ Where:
 
 ## 🚀 Usage
 
-### Conditional Generation (DEFAULT)
+### Data Preparation
 
-**Default Drug-like Properties:**
+Download ChEMBL CNS dataset (10,000+ molecules):
 ```bash
-python inference.py --num_samples 100
-# Generates molecules with LogP=1.0, TPSA=40.0 (default)
-```
-
-**FiLM-Conditioned Generation (Default):**
-```bash
-python inference.py --logp 2.0 --tpsa 60 --num_samples 50
-# Generates molecules targeting LogP=2.0, TPSA=60 using FiLM layers
-```
-
-**Regular Generation (Non-Conditional):**
-```bash
-python inference.py --regular --num_samples 100
-# Uses traditional VAE sampling without property guidance
+python mlx_data/download_chembl_cns.py
 ```
 
 ### Training
 
 **Standard Configuration:**
 ```bash
-python train.py --epochs 100 --batch_size 32 --learning_rate 1e-4 \
-                --max_beta 0.1 --diversity_weight 0.1 --num_heads 8 --num_layers 6 --dropout 0.1
+python train.py --epochs 40 --batch_size 128 --learning_rate 1e-4 \
+                --num_heads 4 --num_layers 4 --dropout 0.1
 ```
 
 **High-Performance Configuration:**
 ```bash
-python train.py --epochs 200 --batch_size 64 --learning_rate 5e-5 \
-                --embedding_dim 256 --hidden_dim 512 --num_heads 16 --num_layers 8
+python train.py --epochs 80 --batch_size 64 --learning_rate 5e-5 \
+                --embedding_dim 256 --hidden_dim 512 --num_heads 8 --num_layers 6
 ```
 
-### Generation & Analysis
+### Conditional Generation & Analysis
 ```bash
-python inference.py --num_samples 128 --temperature 1.0 --top_k 10 \
-                   --max_visualize 50 --checkpoint checkpoints/mlx_mgcvae
+# Generate molecules with specific LogP and TPSA targets
+python inference.py --num_samples 128 --logp 3.21 --tpsa 72.03
+
+# Or use default targets (median values from dataset)
+python inference.py
+```
+
+### Unconditional Generation
+```bash
+python inference.py --regular --num_samples 128
 ```
 
 ### Validation Only
@@ -164,14 +153,14 @@ python utils/visualize.py  # Uses output/validation_results.csv
 
 ```
 QVAE/
-├── models/                 # VAE architecture components
-│   ├── transformer_encoder.py    # Transformer encoder
-│   ├── transformer_decoder.py    # Transformer decoder
-│   ├── transformer_vae.py        # Main VAE model with conditional generation
-│   └── layers/                   # Modular Transformer components
-│       ├── positional_encoding.py
+├── models/                 # Transformer VAE architecture components
+│   ├── transformer_encoder.py    # Transformer encoder with masked pooling
+│   ├── transformer_decoder.py   # Transformer decoder with cross-attention
+│   ├── transformer_vae.py       # Main CVAE model with property conditioning
+│   └── layers/                   # Layer implementations
 │       ├── multi_head_attention.py
 │       ├── feed_forward.py
+│       ├── positional_encoding.py
 │       ├── transformer_encoder_layer.py
 │       └── transformer_decoder_layer.py
 ├── utils/                 # Utility functions
@@ -196,15 +185,19 @@ QVAE/
 
 ## 🎯 Key Innovations
 
-1. **Conditional Property Generation**: First molecular VAE with LogP and TPSA property-guided generation
-2. **Transformer-Only Architecture**: First molecular VAE built exclusively with Transformer components
-3. **Multi-Head Attention**: State-of-the-art attention mechanism for superior sequence modeling
-4. **FiLM Layers**: Feature-wise Linear Modulation for sophisticated property conditioning
-5. **Default FiLM-Conditioned Mode**: Advanced conditional generation is the default behavior for drug discovery
-6. **Free Bits Implementation**: Prevents posterior collapse with configurable KL thresholds
-7. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
-8. **Conformational Analysis**: Strain energy filtering for realistic molecules
-9. **Advanced Regularization**: Information regularization and diversity loss
-10. **Comprehensive Metrics**: QED, SA_Score, and structural property analysis
-11. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
-12. **FiLM-Conditioned Dataset**: Training data includes LogP and TPSA values for sophisticated property learning
+1. **Conditional VAE Architecture**: Property-controlled generation with LogP and TPSA targets
+2. **Transformer-Based**: Multi-head self-attention and cross-attention for sequence modeling
+3. **Property Conditioning**: Deep property encoder (2-layer MLP) with latent fusion layer
+4. **Normalized Properties**: Automatic property normalization (handles 25x scale differences)
+5. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
+6. **Conformational Analysis**: Strain energy filtering for realistic molecules
+7. **Advanced Regularization**: KL annealing, diversity loss, and noise injection
+8. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
+
+## 🧪 Conditional Generation
+
+The model supports property-conditioned generation:
+- **LogP range**: -10.15 to 44.97 (mean: 3.25, std: 2.21)
+- **TPSA range**: 0 to 810 (mean: 81.55, std: 54.86)
+- **Median values**: LogP=3.21, TPSA=72.03 (optimal for CNS penetration)
+- **Accuracy**: Property conditioning with CVAE architecture

@@ -37,20 +37,20 @@ def strain_filter(smiles_list, ff='MMFF94', verbose=True):
                     stats['passed'] += 1
                 else:
                     stats['high_strain'] += 1
-                    if verbose: print(f"❌ HIGH STRAIN: '{smiles}' ({strain:.1f} kcal/mol)")
+                    if verbose: print(f" HIGH STRAIN: '{smiles}' ({strain:.1f} kcal/mol)")
             else:
                 stats['embedding_failed'] += 1
-                if verbose: print(f"❌ EMBEDDING FAILED: '{smiles}'")
+                if verbose: print(f" EMBEDDING FAILED: '{smiles}'")
         except Exception as e:
             stats['force_field_failed'] += 1
-            if verbose: print(f"❌ FORCE FIELD ERROR: '{smiles}'")
+            if verbose: print(f" FORCE FIELD ERROR: '{smiles}'")
     
     if verbose:
-        print(f"📊 Strain Filter Summary:")
-        print(f"   ❌ High strain (>={THRESHOLD} kcal/mol): {stats['high_strain']} molecules")
-        print(f"   ❌ Embedding failed: {stats['embedding_failed']} molecules")
-        print(f"   ❌ Force field failed: {stats['force_field_failed']} molecules")
-        print(f"   ✅ Passed: {stats['passed']} molecules")
+        print(f" Strain Filter Summary:")
+        print(f"    High strain (>={THRESHOLD} kcal/mol): {stats['high_strain']} molecules")
+        print(f"    Embedding failed: {stats['embedding_failed']} molecules")
+        print(f"    Force field failed: {stats['force_field_failed']} molecules")
+        print(f"    Passed: {stats['passed']} molecules")
         print()
     
     return filtered_smiles
