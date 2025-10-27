@@ -162,7 +162,7 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         logits, mu, logvar, predicted_properties = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
         
         # Get reconstruction, KL, and diversity losses
-        recon_loss, kl_loss, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
+        _, recon_loss, kl_loss, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
         
         # Property prediction loss (CVAE requirement)
         # Normalize targets
