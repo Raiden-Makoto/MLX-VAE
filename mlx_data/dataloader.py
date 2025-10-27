@@ -45,5 +45,3 @@ def create_batches(data, batch_size, shuffle=True):
 
 # Create batches
 batches = create_batches(tokenized_mx, BATCH_SIZE, shuffle=True)
-print(f"Created {len(batches)} batches of size {BATCH_SIZE}")
-print(f"Batch shape: {batches[0].shape}")

@@ -26,9 +26,9 @@ parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs t
 parser.add_argument('--max_beta', type=float, default=0.1, help='Maximum beta value')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
-parser.add_argument('--property_weight', type=float, default=2.0, help='Weight for property prediction loss')
-parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads')
-parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers')
+parser.add_argument('--property_weight', type=float, default=10.0, help='Weight for property prediction loss (CVAE requires high weight)')
+parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads (FIXED at 4)')
+parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers (FIXED at 4)')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 
@@ -57,41 +57,35 @@ properties = np.array([
     for prop in properties_raw
 ], dtype=np.float32)
 
-print(f"Property normalization:")
-print(f"  LogP: mean={logp_mean:.2f}, std={logp_std:.2f}")
-print(f"  TPSA: mean={tpsa_mean:.2f}, std={tpsa_std:.2f}")
-
 args = parser.parse_args()
+
+# ENFORCE 4 LAYERS 4 HEADS - NEVER CHANGE THIS
+args.num_layers = 4
+args.num_heads = 4
 
 # Prepare data
 tokenized_mx = mx.array(tokenized)
 properties_mx = mx.array(properties)
 
-# Create function to create batches with properties
-def create_batches_with_properties(data, properties, batch_size, shuffle=True):
-    """Create batches from data with corresponding properties"""
-    n_samples = data.shape[0]
-    
-    if shuffle:
-        # Create random permutation of indices
-        indices = mx.random.permutation(mx.arange(n_samples))
-        data = data[indices]
-        properties = properties[indices]
-    
-    n_batches = n_samples // batch_size
-    batches = []
-    
-    for i in range(n_batches):
-        start_idx = i * batch_size
-        end_idx = start_idx + batch_size
-        
-        batch_data = data[start_idx:end_idx]
-        batch_properties = properties[start_idx:end_idx]
-        batches.append((batch_data, batch_properties))
-    
-    return batches
+# Use create_batches from dataloader, but pair with properties
+from mlx_data.dataloader import create_batches
 
-batches = create_batches_with_properties(tokenized_mx, properties_mx, args.batch_size, shuffle=True)
+# Shuffle data and properties together
+if True:  # Always shuffle
+    n_samples = tokenized_mx.shape[0]
+    indices = mx.random.permutation(mx.arange(n_samples))
+    tokenized_mx = tokenized_mx[indices]
+    properties_mx = properties_mx[indices]
+
+# Create batches using existing function
+batches_data = create_batches(tokenized_mx, args.batch_size, shuffle=False)  # Already shuffled above
+
+# Pair batches with properties
+batches = []
+for batch_data in batches_data:
+    # Get corresponding properties
+    batch_properties = properties_mx[len(batches) * args.batch_size:(len(batches) + 1) * args.batch_size]
+    batches.append((batch_data, batch_properties))
 
 # Initialize model and optimizer
 print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
@@ -117,7 +111,7 @@ os.makedirs(args.output_dir, exist_ok=True)
 # Resume from best model if specified
 start_epoch = 0
 if args.resume:
-    print(f"🔄 Resuming training...")
+    print(f"Resuming training...")
     
     # Load last epoch from text file
     last_epoch_file = os.path.join(args.output_dir, 'last_epoch.txt')
@@ -125,14 +119,14 @@ if args.resume:
         with open(last_epoch_file, 'r') as f:
             last_completed_epoch = int(f.read().strip())
             start_epoch = last_completed_epoch + 1  # Resume from next epoch
-        print(f"📅 Resuming from epoch {start_epoch} (last completed: {last_completed_epoch})")
+        print(f"Resuming from epoch {start_epoch} (last completed: {last_completed_epoch})")
     else:
         print("No last_epoch.txt found, starting from epoch 1")
     
     # Load best model weights if available
     best_model_path = os.path.join(args.output_dir, 'best_model.npz')
     if os.path.exists(best_model_path):
-        print(f"🏆 Loading best model weights from: {best_model_path}")
+        print(f"Loading best model weights from: {best_model_path}")
         model.load_weights(best_model_path)
         # Also load normalization stats if available
         norm_file = os.path.join(args.output_dir, 'property_norm.json')
@@ -147,10 +141,7 @@ if args.resume:
                 norm_stats['tpsa_std']
             )
     else:
-        print("❌ No best_model.npz found, starting from scratch...")
-
-print(f"Initialized model and optimizer")
-print(f"Checkpoints will be saved to: {args.output_dir}")
+        print("No best_model.npz found, starting from scratch...")
 
 # Best model tracking
 best_loss = float('inf')
@@ -163,7 +154,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     stored_losses = {}
     
     def loss_fn(model):
-        logits, mu, logvar, predicted_properties = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
+        result = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
+        logits, mu, logvar, predicted_properties, property_kl_mu, property_kl_logvar = result
         
         # Get reconstruction, KL, and diversity losses
         _, recon_loss, kl_loss, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
@@ -177,14 +169,24 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         # MSE loss between predicted and target properties
         property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
         
+        # Property-conditioned KL divergence (CVAE best practice)
+        # KL(q(z|properties) || N(0,1)) to regularize property-conditioned latent
+        if property_kl_mu is not None and property_kl_logvar is not None:
+            # Standard KL divergence formula
+            property_kl = -0.5 * mx.sum(1 + property_kl_logvar - property_kl_mu**2 - mx.exp(property_kl_logvar), axis=1)
+            property_kl = mx.mean(property_kl)
+        else:
+            property_kl = mx.array(0.0)
+        
         # Store losses for later (evaluate immediately)
         stored_losses['recon'] = float(recon_loss.item())
         stored_losses['kl'] = float(kl_loss.item())
         stored_losses['diversity'] = float(diversity_loss.item())
         stored_losses['property'] = float(property_loss.item())
+        stored_losses['property_kl'] = float(property_kl.item())
         
-        # Weighted total loss
-        total_loss = recon_loss + kl_loss + diversity_weight * diversity_loss + property_weight * property_loss
+        # Weighted total loss with property KL
+        total_loss = recon_loss + kl_loss + diversity_weight * diversity_loss + property_weight * property_loss + 0.01 * property_kl
         
         return total_loss
     
@@ -237,9 +239,8 @@ else:
     print(f"Training model for {total_epochs} epochs")
 print(f"Batch size: {args.batch_size}, Learning rate: {args.learning_rate}")
 print(f"Beta warmup: {args.beta_warmup_epochs} epochs, Max beta: {args.max_beta}")
-print(f"Latent noise std: {args.latent_noise_std}")
 print(f"Diversity weight: {args.diversity_weight}")
-print(f"Total batches per epoch: {len(batches)}")
+print(f"Property weight: {args.property_weight}")
 print("="*67)
 
 for epoch in range(start_epoch, total_epochs):
@@ -289,17 +290,24 @@ for epoch in range(start_epoch, total_epochs):
     if final_loss < best_loss:
         best_loss = final_loss
         model.save_weights(best_model_path)
-        # Also save normalization stats
+        # Also save normalization stats and architecture params
         import json
         norm_stats = {
             'logp_mean': float(logp_mean),
             'logp_std': float(logp_std),
             'tpsa_mean': float(tpsa_mean),
-            'tpsa_std': float(tpsa_std)
+            'tpsa_std': float(tpsa_std),
+            # Save architecture parameters to ensure consistent loading
+            'embedding_dim': args.embedding_dim,
+            'hidden_dim': args.hidden_dim,
+            'latent_dim': args.latent_dim,
+            'num_heads': args.num_heads,
+            'num_layers': args.num_layers,
+            'dropout': args.dropout
         }
         with open(f'{args.output_dir}/property_norm.json', 'w') as f:
             json.dump(norm_stats, f)
-        print(f"🏆 New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
+        print(f"New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
     else:
         print(f"Best loss so far: {best_loss:.4f}")
     
@@ -316,4 +324,4 @@ for epoch in range(start_epoch, total_epochs):
     with open(last_epoch_file, 'w') as f:
         f.write(str(epoch))
 
-print("🎉 Training completed!")
+print("Training completed!")

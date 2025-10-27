@@ -159,15 +159,15 @@ if __name__ == "__main__":
     # Load molecules
     print("Loading molecules from CSV...")
     df = load_molecules_from_csv()
-    print(f"✅ Loaded {len(df)} valid molecules")
+    print(f" Loaded {len(df)} valid molecules")
     
     # Create molecule grid visualization
-    print("🎨 Creating molecule grid visualization...")
+    print(" Creating molecule grid visualization...")
     fig1 = create_molecule_grid(df, max_molecules=50)
     if fig1 is not None:
         fig1.savefig('output/molecule_grid.png', dpi=300, bbox_inches='tight')
         print("Saved molecule grid to output/molecule_grid.png")
     else:
-        print("❌ Could not create molecule grid visualization")
+        print(" Could not create molecule grid visualization")
    
     # plt.show()  # Commented out to avoid hanging terminal

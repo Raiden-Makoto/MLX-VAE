@@ -12,8 +12,8 @@ class SelfiesTransformerVAE(nn.Module):
         embedding_dim: int=128,
         hidden_dim: int=256,
         latent_dim: int=64,
-        num_heads: int=8,
-        num_layers: int=6,
+        num_heads: int=4,
+        num_layers: int=4,
         dropout: float=0.1,
     ):
         super().__init__()
@@ -34,6 +34,27 @@ class SelfiesTransformerVAE(nn.Module):
             nn.Linear(self.num_properties, hidden_dim),
             nn.ReLU(),
             nn.Linear(hidden_dim, embedding_dim)  # Output to embedding_dim for FILM
+        )
+        
+        # Property-conditioned latent (best practice for CVAE)
+        # Learn p(z|properties) instead of just p(z)
+        self.property_to_latent = nn.Sequential(
+            nn.Linear(self.num_properties, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)  # Map properties to latent space
+        )
+        
+        # Property-conditioned latent distribution parameters
+        # Generate mu and sigma from properties for better conditioning
+        self.property_mu = nn.Sequential(
+            nn.Linear(self.num_properties, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)
+        )
+        self.property_logvar = nn.Sequential(
+            nn.Linear(self.num_properties, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)
         )
         
         # Property prediction head (CVAE requirement)
@@ -68,20 +89,33 @@ class SelfiesTransformerVAE(nn.Module):
         input_seq = x[:, :-1]
         target_seq = x[:, 1:]  # Shift for next token prediction
         
-        # Encode to latent space
-        mu, logvar = self.encoder(input_seq)
+        # Get property embedding for conditioning (best practice for CVAE)
+        if properties is not None:
+            property_embedding = self.property_encoder(properties)  # [B, embedding_dim]
+        else:
+            property_embedding = None
+        
+        # Encode to latent space WITH property conditioning (best practice for CVAE)
+        mu, logvar = self.encoder(input_seq, property_embedding)
         z = self.reparameterize(mu, logvar)
+        
+        # Property-conditioned latent for training (best practice for CVAE)
+        # Learn to generate z from properties
+        if properties is not None:
+            property_mu = self.property_mu(properties)  # [B, latent_dim]
+            property_logvar = self.property_logvar(properties)  # [B, latent_dim]
+            
+            # Use property-conditioned z ONLY (forces property encoding)
+            # This makes property_mu learn to produce the right z for each property
+            z_property = self.reparameterize(property_mu, property_logvar)
+            z = z_property  # Use only property-conditioned z, not blended
+        else:
+            z_property = None
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
             noise = mx.random.normal(z.shape) * noise_std
             z = z + noise
-        
-        # Get property embedding for FILM conditioning (best practice)
-        if properties is not None:
-            property_embedding = self.property_encoder(properties)  # [B, embedding_dim]
-        else:
-            property_embedding = None
         
         # Decode from latent space with FILM conditioning
         logits = self.decoder(z, input_seq, property_embedding)
@@ -89,11 +123,19 @@ class SelfiesTransformerVAE(nn.Module):
         # Predict properties from latent code (for CVAE property loss)
         predicted_properties = self.property_predictor(z)  # [B, 2]
         
-        return logits, mu, logvar, predicted_properties
+        # Return both encoder and property-conditioned latents for KL divergence
+        if properties is not None:
+            property_kl_mu = property_mu
+            property_kl_logvar = property_logvar
+        else:
+            property_kl_mu = None
+            property_kl_logvar = None
+        
+        return logits, mu, logvar, predicted_properties, property_kl_mu, property_kl_logvar
 
     def generate_conditional(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
         """Generate molecules with target LogP and TPSA values"""
-        print(f"🎯 Generating molecules with LogP={target_logp}, TPSA={target_tpsa}")
+        print(f" Generating molecules with LogP={target_logp}, TPSA={target_tpsa}")
         
         # Normalize properties if normalization params are set
         if self.logp_mean is not None and self.logp_std is not None:
@@ -107,8 +149,15 @@ class SelfiesTransformerVAE(nn.Module):
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
         property_embedding = self.property_encoder(properties_array)  # [num_samples, embedding_dim]
         
-        # Sample from prior N(0,1) - matches training where encoder learns q(z|x)
-        z = mx.random.normal((num_samples, self.latent_dim))
+        # Sample z from property-conditioned distribution (best practice for CVAE)
+        # Generate mu and sigma from properties
+        property_mu = self.property_mu(properties_array)  # [num_samples, latent_dim]
+        property_logvar = self.property_logvar(properties_array)  # [num_samples, latent_dim]
+        
+        # Sample z using reparameterization trick with property conditioning
+        std = mx.exp(0.5 * property_logvar)
+        noise = mx.random.normal((num_samples, self.latent_dim))
+        z = property_mu + std * noise
         
         # Decode with FILM conditioning
         samples = self._decode_conditional(z, property_embedding, temperature, top_k)

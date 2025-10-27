@@ -9,30 +9,30 @@ from utils.geomopt import strain_filter
 
 def validate_selfies(selfies_str, verbose=False):
     if not selfies_str: 
-        if verbose: print(f"❌ EMPTY SELFIES: '{selfies_str}'")
+        if verbose: print(f" EMPTY SELFIES: '{selfies_str}'")
         return None
     
     try:
         smiles = sf.decoder(selfies_str)
         if not smiles or smiles.strip() == '': 
-            if verbose: print(f"❌ EMPTY SMILES: SELFIES '{selfies_str}' -> empty SMILES")
+            if verbose: print(f" EMPTY SMILES: SELFIES '{selfies_str}' -> empty SMILES")
             return None
         
         # Filter out charged molecules (only actual charges outside brackets)
         # Brackets can contain formal charges like [NH3+] which are valid
         if '+' in smiles.replace('[', '').replace(']', '') or '-' in smiles.replace('[', '').replace(']', ''):
-            if verbose: print(f"❌ CHARGED MOLECULE: '{smiles}' (contains charges outside brackets)")
+            if verbose: print(f" CHARGED MOLECULE: '{smiles}' (contains charges outside brackets)")
             return None
         
         # Filter out radicals (only actual radicals with dots)
         # Valid bracketed atoms like [NH1], [nH], [cH] should pass
         if '[.' in smiles or '.]' in smiles:
-            if verbose: print(f"❌ RADICAL: '{smiles}' (contains radical dots)")
+            if verbose: print(f" RADICAL: '{smiles}' (contains radical dots)")
             return None
         
         mol = Chem.MolFromSmiles(smiles)
         if mol is None: 
-            if verbose: print(f"❌ INVALID STRUCTURE: '{smiles}' (RDKit cannot parse)")
+            if verbose: print(f" INVALID STRUCTURE: '{smiles}' (RDKit cannot parse)")
             return None
         
         # Get canonical SMILES to avoid duplicates
@@ -48,7 +48,7 @@ def validate_selfies(selfies_str, verbose=False):
             'qed': QED.qed(mol)
         }
     except Exception as e:
-        if verbose: print(f"❌ DECODE ERROR: SELFIES '{selfies_str}' -> {e}")
+        if verbose: print(f" DECODE ERROR: SELFIES '{selfies_str}' -> {e}")
         return None
 
 def batch_validate_selfies(selfies_list, verbose=True):
@@ -71,7 +71,7 @@ def batch_validate_selfies(selfies_list, verbose=True):
     }
     
     if verbose:
-        print(f"🔍 DETAILED VALIDATION REPORT")
+        print(f" DETAILED VALIDATION REPORT")
         print(f"=" * 60)
         print(f"Input: {stats['total_input']} SELFIES sequences")
         print()
@@ -83,7 +83,7 @@ def batch_validate_selfies(selfies_list, verbose=True):
     for i, selfies in enumerate(selfies_list):
         if not selfies or selfies.strip() == '':
             stats['empty_selfies'] += 1
-            if verbose: print(f"❌ EMPTY SELFIES: '{selfies}'")
+            if verbose: print(f" EMPTY SELFIES: '{selfies}'")
             continue
             
         result = validate_selfies(selfies, verbose=verbose)
@@ -91,7 +91,7 @@ def batch_validate_selfies(selfies_list, verbose=True):
             # Check for duplicates
             if result['smiles'] in seen_smiles:
                 stats['duplicates'] += 1
-                if verbose: print(f"❌ DUPLICATE: '{result['smiles']}' (already seen)")
+                if verbose: print(f" DUPLICATE: '{result['smiles']}' (already seen)")
             else:
                 basic_valid.append(result)
                 seen_smiles.add(result['smiles'])
@@ -101,36 +101,36 @@ def batch_validate_selfies(selfies_list, verbose=True):
                 smiles = sf.decoder(selfies)
                 if not smiles or smiles.strip() == '':
                     stats['empty_smiles'] += 1
-                    if verbose: print(f"❌ EMPTY SMILES: '{smiles}'")
+                    if verbose: print(f" EMPTY SMILES: '{smiles}'")
                 elif '+' in smiles.replace('[', '').replace(']', '') or '-' in smiles.replace('[', '').replace(']', ''):
                     stats['charged_molecules'] += 1
-                    if verbose: print(f"❌ CHARGED: '{smiles}'")
+                    if verbose: print(f" CHARGED: '{smiles}'")
                 elif '[.' in smiles or '.]' in smiles:
                     stats['radicals'] += 1
-                    if verbose: print(f"❌ RADICAL: '{smiles}'")
+                    if verbose: print(f" RADICAL: '{smiles}'")
                 else:
                     stats['invalid_structures'] += 1
-                    if verbose: print(f"❌ INVALID: '{smiles}'")
+                    if verbose: print(f" INVALID: '{smiles}'")
             except:
                 stats['decode_errors'] += 1
-                if verbose: print(f"❌ DECODE ERROR: '{selfies}'")
+                if verbose: print(f" DECODE ERROR: '{selfies}'")
     
     stats['basic_valid'] = len(basic_valid)
     
     if verbose:
-        print(f"\n📊 Basic Validation Summary:")
-        print(f"   ✅ Valid molecules: {stats['basic_valid']}")
-        print(f"   ❌ Empty SELFIES: {stats['empty_selfies']}")
-        print(f"   ❌ Decode errors: {stats['decode_errors']}")
-        print(f"   ❌ Empty SMILES: {stats['empty_smiles']}")
-        print(f"   ❌ Charged molecules: {stats['charged_molecules']}")
-        print(f"   ❌ Radicals: {stats['radicals']}")
-        print(f"   ❌ Invalid structures: {stats['invalid_structures']}")
-        print(f"   ❌ Duplicates: {stats['duplicates']}")
+        print(f"\n Basic Validation Summary:")
+        print(f"    Valid molecules: {stats['basic_valid']}")
+        print(f"    Empty SELFIES: {stats['empty_selfies']}")
+        print(f"    Decode errors: {stats['decode_errors']}")
+        print(f"    Empty SMILES: {stats['empty_smiles']}")
+        print(f"    Charged molecules: {stats['charged_molecules']}")
+        print(f"    Radicals: {stats['radicals']}")
+        print(f"    Invalid structures: {stats['invalid_structures']}")
+        print(f"    Duplicates: {stats['duplicates']}")
         print()
     
     if not basic_valid:
-        if verbose: print("❌ No valid molecules after basic validation!")
+        if verbose: print(" No valid molecules after basic validation!")
         return results
     
     # Step 2: Preliminary filtering
@@ -140,7 +140,7 @@ def batch_validate_selfies(selfies_list, verbose=True):
     stats['preliminary_filtered'] = len(smiles_list) - len(filtered_smiles)
     
     if verbose:
-        print(f"   ❌ Filtered out: {stats['preliminary_filtered']} molecules")
+        print(f"    Filtered out: {stats['preliminary_filtered']} molecules")
         print()
     
     # Step 3: Strain filtering
@@ -149,7 +149,7 @@ def batch_validate_selfies(selfies_list, verbose=True):
     stats['strain_filtered'] = len(filtered_smiles) - len(final_filtered_smiles)
     
     if verbose:
-        print(f"   ❌ Filtered out: {stats['strain_filtered']} molecules")
+        print(f"    Filtered out: {stats['strain_filtered']} molecules")
         print()
     
     # Filter results to only include final valid molecules
@@ -158,7 +158,7 @@ def batch_validate_selfies(selfies_list, verbose=True):
     stats['final_valid'] = len(final_results)
     
     if verbose:
-        print(f"📊 FINAL SUMMARY:")
+        print(f" FINAL SUMMARY:")
         print(f"=" * 60)
         print(f"Input molecules:     {stats['total_input']:3d}")
         print(f"Basic validation:    {stats['basic_valid']:3d} ({stats['basic_valid']/stats['total_input']*100:.1f}%)")

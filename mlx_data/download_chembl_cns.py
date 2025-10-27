@@ -128,7 +128,7 @@ for i, record in enumerate(tqdm.tqdm(results, desc="Processing molecules")):
         skipped += 1
         continue
 
-print(f"\n✅ Processed {processed} CNS molecules")
+print(f"\n Processed {processed} CNS molecules")
 print(f"   Total in file: {len(output_data)}")
 
 if processed == 0:
@@ -200,7 +200,7 @@ with open(output_path, 'w') as f:
 
 np.save(output_npy, tokenized_data)
 
-print(f"\n✅ Saved {len(output_data)} ChEMBL CNS molecules to {output_path}")
+print(f"\n Saved {len(output_data)} ChEMBL CNS molecules to {output_path}")
 if logp_values:
     print(f"   Average LogP: {np.mean(logp_values):.2f}")
     print(f"   LogP range: {min(logp_values):.2f} - {max(logp_values):.2f}")

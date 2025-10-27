@@ -12,17 +12,18 @@ class FILM(nn.Module):
     def __call__(self, features, conditions):
         """
         Args:
-            features: [B, ..., D] - features to modulate
+            features: [B, T, D] - features to modulate
             conditions: [B, condition_dim] - conditioning information
         
         Returns:
-            modulated_features: [B, ..., D] - features modulated by conditions
+            modulated_features: [B, T, D] - features modulated by conditions
         """
-        # Expand conditions to match feature dimensions
+        # Generate modulation parameters
         gamma = self.gamma_linear(conditions)  # [B, D]
         beta = self.beta_linear(conditions)     # [B, D]
         
-        # Expand to match feature spatial dimensions
+        # Broadcast gamma and beta across sequence length
+        # features is [B, T, D], so we expand to [B, 1, D] and broadcast
         gamma = mx.expand_dims(gamma, axis=1)  # [B, 1, D]
         beta = mx.expand_dims(beta, axis=1)     # [B, 1, D]
         

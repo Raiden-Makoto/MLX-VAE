@@ -11,8 +11,8 @@ class SelfiesTransformerDecoder(nn.Module):
         embedding_dim: int=128,
         hidden_dim: int=256,
         latent_dim: int=64,
-        num_heads: int=8,
-        num_layers: int=6,
+        num_heads: int=4,
+        num_layers: int=4,
         dropout: float=0.1,
     ):
         super().__init__()
