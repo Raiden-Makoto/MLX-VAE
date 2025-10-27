@@ -71,9 +71,9 @@ class SelfiesTransformerVAE(nn.Module):
         if properties is not None:
             # Encode properties to latent space
             property_latent = self.property_encoder(properties)  # [B, latent_dim]
-            # Use weighted combination: property dominates (90%), encoder output provides structure (10%)
-            # This allows properties to guide while maintaining molecule structure
-            z = 0.1 * z + 0.9 * property_latent
+            # Concatenate encoder output with property conditioning, then fuse
+            combined = mx.concatenate([z, property_latent], axis=-1)  # [B, latent_dim*2]
+            z = self.latent_fusion(combined)  # [B, latent_dim]
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
@@ -103,16 +103,12 @@ class SelfiesTransformerVAE(nn.Module):
         
         # Sample from learned distribution - the encoder learns to map to N(0,1) with KL
         # During training: encoder(x) -> q(z|x,c), which after training should be p(z|c) ≈ N(0,1) 
-        # At inference: sample from p(z|c) which we approximate as N(property_shift, I)
-        # where property_shift is learned from training
-        
-        # Match training approach: property dominates (90%), noise for diversity (10%)
+        # At inference: sample from p(z|c) which we approximate as N(0,1) conditioned on properties
         base_z = mx.random.normal((num_samples, self.latent_dim))
-        z = 0.1 * base_z + 0.9 * property_latent
         
-        # Alternatively: use fusion layer (but property should dominate)
-        # combined = mx.concatenate([base_z, property_latent], axis=-1)
-        # z = self.latent_fusion(combined)
+        # Match training approach: use fusion layer to combine base_z and property_latent
+        combined = mx.concatenate([base_z, property_latent], axis=-1)
+        z = self.latent_fusion(combined)
         
         # Decode to generate molecules
         samples = self._decode_conditional(z, temperature, top_k)
