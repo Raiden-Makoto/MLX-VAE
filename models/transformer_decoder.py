@@ -27,6 +27,9 @@ class SelfiesTransformerDecoder(nn.Module):
         # Latent to hidden projection
         self.latent_projection = nn.Linear(latent_dim, embedding_dim)
         
+        # Property conditioning: concatenate z and property embeddings, project down
+        self.property_fusion = nn.Linear(embedding_dim * 2, embedding_dim)
+        
         # Transformer decoder layers
         self.decoder_layers = [
             TransformerDecoderLayer(embedding_dim, num_heads, hidden_dim, dropout)
@@ -38,20 +41,31 @@ class SelfiesTransformerDecoder(nn.Module):
         
         self.dropout = nn.Dropout(dropout)
         
-    def __call__(self, z, input_seq):
+    def __call__(self, z, input_seq, property_embedding=None):
         # z: [B, latent_dim] - latent codes
         # input_seq: [B, T] - input sequences (for teacher forcing)
+        # property_embedding: [B, embedding_dim] - optional property conditioning
         batch_size, seq_len = input_seq.shape
         
         # Project latent code to embedding dimension
         latent_embedding = self.latent_projection(z)  # [B, embedding_dim]
-        latent_embedding = mx.expand_dims(latent_embedding, axis=1)  # [B, 1, embedding_dim]
+        
+        # Add property conditioning if provided (CVAE best practice: concatenate)
+        if property_embedding is not None:
+            # Concatenate latent and property embeddings
+            latent_with_properties = mx.concatenate([latent_embedding, property_embedding], axis=-1)  # [B, embedding_dim*2]
+            # Project back down to embedding_dim
+            combined = self.property_fusion(latent_with_properties)
+        else:
+            combined = latent_embedding
+        
+        latent_embedding = mx.expand_dims(combined, axis=1)  # [B, 1, embedding_dim]
         
         # Token embedding + positional encoding
         embedded = self.token_embedding(input_seq)  # [B, T, embedding_dim]
         embedded = self.positional_encoding(embedded)
         
-        # Add latent information to embeddings for stronger conditioning
+        # Add latent information to embeddings
         embedded = embedded + mx.tile(latent_embedding, (1, seq_len, 1))
         embedded = self.dropout(embedded)
         
