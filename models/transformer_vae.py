@@ -63,8 +63,8 @@ class SelfiesTransformerVAE(nn.Module):
         if properties is not None:
             # properties: [B, 2] - logp and tpsa
             property_embedding = self.property_embedding(properties)  # [B, latent_dim]
-            # Combine with base latent code
-            z = z + property_embedding
+            # Use property as base, blend with encoder output for smooth generation
+            z = 0.7 * property_embedding + 0.3 * z
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
@@ -92,9 +92,9 @@ class SelfiesTransformerVAE(nn.Module):
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
         property_latent = self.property_embedding(properties_array)  # [num_samples, latent_dim]
         
-        # Start from property-guided latent instead of random noise
-        # This uses property_embedding as the base, then add some noise for diversity
-        noise = mx.random.normal((num_samples, self.latent_dim)) * 0.5  # Small noise for diversity
+        # Use property embedding as base (matches training blend of property_embedding + encoder)
+        # Add small noise for diversity (matches training noise_std=0.05)
+        noise = mx.random.normal((num_samples, self.latent_dim)) * 0.05
         z = property_latent + noise
         
         # Decode to generate molecules
