@@ -63,8 +63,8 @@ class SelfiesTransformerVAE(nn.Module):
         if properties is not None:
             # properties: [B, 2] - logp and tpsa
             property_embedding = self.property_embedding(properties)  # [B, latent_dim]
-            # Property embedding determines the latent code (makes it the base)
-            z = property_embedding
+            # Property shifts the latent: keep structure from encoder, adjust by properties
+            z = z + property_embedding
         
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
@@ -92,10 +92,11 @@ class SelfiesTransformerVAE(nn.Module):
         properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
         property_latent = self.property_embedding(properties_array)  # [num_samples, latent_dim]
         
-        # Use property embedding directly as latent (matches training)
-        # Add small noise for diversity (matches training noise_std=0.05)
-        noise = mx.random.normal((num_samples, self.latent_dim)) * 0.05
-        z = property_latent + noise
+        # Sample from learned distribution then shift by properties
+        # Training: z = encoder(x) + property_embedding, so encoder(x) ~ N(0, I)
+        # Inference: Sample N(0,1) then shift by properties
+        base_z = mx.random.normal((num_samples, self.latent_dim))
+        z = base_z + property_latent
         
         # Decode to generate molecules
         samples = self._decode_conditional(z, temperature, top_k)
