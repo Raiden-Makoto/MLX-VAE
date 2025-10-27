@@ -173,7 +173,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         # MSE loss between predicted and target properties
         property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
         
-        total_loss = recon_loss + kl_loss + diversity_loss + property_weight * property_loss
+        # Weighted total loss
+        total_loss = recon_loss + kl_loss + diversity_weight * diversity_loss + property_weight * property_loss
         
         return total_loss, recon_loss, kl_loss, diversity_loss, property_loss
     
