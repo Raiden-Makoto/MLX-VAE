@@ -158,6 +158,9 @@ best_model_path = os.path.join(args.output_dir, 'best_model.npz')
 # Training function
 def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01, property_weight=1.0):
     """Single training step"""
+    # Store losses for access after computation
+    stored_losses = {}
+    
     def loss_fn(model):
         logits, mu, logvar, predicted_properties = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
         
@@ -173,6 +176,12 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         # MSE loss between predicted and target properties
         property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
         
+        # Store losses for later
+        stored_losses['recon'] = recon_loss
+        stored_losses['kl'] = kl_loss
+        stored_losses['diversity'] = diversity_loss
+        stored_losses['property'] = property_loss
+        
         # Weighted total loss
         total_loss = recon_loss + kl_loss + diversity_weight * diversity_loss + property_weight * property_loss
         
@@ -181,15 +190,11 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     # Compute loss and gradients
     loss, grads = mx.value_and_grad(loss_fn)(model)
     
-    # Recompute for tracking (can't get individual losses from value_and_grad)
-    logits, mu, logvar, predicted_properties = model(batch_data, properties=batch_properties, training=False)
-    _, recon_loss, kl_loss, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
-    norm_logp = (batch_properties[:, 0] - model.logp_mean) / model.logp_std
-    norm_tpsa = (batch_properties[:, 1] - model.tpsa_mean) / model.tpsa_std
-    normalized_targets = mx.array([[norm_logp[i], norm_tpsa[i]] for i in range(batch_properties.shape[0])])
-    property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
-    
     total_loss = loss
+    recon_loss = stored_losses['recon']
+    kl_loss = stored_losses['kl']
+    diversity_loss = stored_losses['diversity']
+    property_loss = stored_losses['property']
     
     # Clip gradients to prevent explosion
     def clip_grads(grads):
