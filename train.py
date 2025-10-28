@@ -199,6 +199,14 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         # Clip to prevent extreme values
         predicted_properties = mx.clip(predicted_properties, -10, 10)
         
+        # Debug: Print first batch to see if predicted_properties are actually normalized
+        if batch_idx == 0 and stored_losses.get('debug_printed', False) == False:
+            print(f"\nDEBUG: batch_properties (first 3): {batch_properties[:3]}")
+            print(f"DEBUG: predicted_properties (first 3): {predicted_properties[:3]}")
+            print(f"DEBUG: batch properties range: [{mx.min(batch_properties[:, 0]).item():.3f}, {mx.max(batch_properties[:, 0]).item():.3f}]")
+            print(f"DEBUG: predicted properties range: [{mx.min(predicted_properties[:, 0]).item():.3f}, {mx.max(predicted_properties[:, 0]).item():.3f}]")
+            stored_losses['debug_printed'] = True
+        
         # Compare directly in normalized space
         logp_loss = mx.mean((predicted_properties[:, 0] - batch_properties[:, 0]) ** 2)
         tpsa_loss = mx.mean((predicted_properties[:, 1] - batch_properties[:, 1]) ** 2)
