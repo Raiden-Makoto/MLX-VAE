@@ -27,7 +27,11 @@ if not os.path.exists(output_path):
 else:
     with open(output_path, 'r') as f:
         data = json.load(f)
-        output_data = data.get('molecules', [])
+        # Handle both list and dict formats
+        if isinstance(data, list):
+            output_data = data
+        else:
+            output_data = data.get('molecules', [])
         # Create a set of existing SMILES to avoid duplicates
         existing_smiles = set(mol['smiles'] for mol in output_data)
         print(f"Found {len(existing_smiles)} existing molecules")
