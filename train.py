@@ -71,10 +71,6 @@ args.num_heads = 4
 tokenized_mx = mx.array(tokenized)
 properties_mx = mx.array(properties)
 
-# Debug: Check if properties are normalized
-print(f"DEBUG: Properties range - LogP: [{np.min(properties[:, 0]):.3f}, {np.max(properties[:, 0]):.3f}], TPSA: [{np.min(properties[:, 1]):.3f}, {np.max(properties[:, 1]):.3f}]")
-print(f"DEBUG: If normalized, both should be in range [-3, 3]. If raw LogP [-20, 50], TPSA [0, 2000]")
-
 # Use create_batches from dataloader, but pair with properties
 # Shuffle data and properties together
 if True:  # Always shuffle
@@ -221,35 +217,6 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         logp_loss = mx.clip(logp_loss, 0, 1e6)
         tpsa_loss = mx.clip(tpsa_loss, 0, 1e6)
         
-        # Detailed NaN diagnosis
-        if batch_idx == 0:  # First batch only
-            # Check each component
-            has_nan_pred = mx.any(mx.isnan(predicted_properties))
-            has_inf_pred = mx.any(mx.isinf(predicted_properties))
-            has_nan_batch = mx.any(mx.isnan(batch_properties))
-            has_inf_batch = mx.any(mx.isinf(batch_properties))
-            
-            stored_losses['diag'] = {
-                'pred_nan': bool(has_nan_pred.item()),
-                'pred_inf': bool(has_inf_pred.item()),
-                'batch_nan': bool(has_nan_batch.item()),
-                'batch_inf': bool(has_inf_batch.item()),
-                'pred_logp_min': float(mx.min(predicted_properties[:, 0]).item()) if not has_inf_pred else -999,
-                'pred_logp_max': float(mx.max(predicted_properties[:, 0]).item()) if not has_inf_pred else 999,
-                'pred_tpsa_min': float(mx.min(predicted_properties[:, 1]).item()) if not has_inf_pred else -999,
-                'pred_tpsa_max': float(mx.max(predicted_properties[:, 1]).item()) if not has_inf_pred else 999,
-                'batch_logp_min': float(mx.min(batch_properties[:, 0]).item()),
-                'batch_logp_max': float(mx.max(batch_properties[:, 0]).item()),
-                'batch_tpsa_min': float(mx.min(batch_properties[:, 1]).item()),
-                'batch_tpsa_max': float(mx.max(batch_properties[:, 1]).item()),
-                'logp_mean': float(model.logp_mean),
-                'logp_std': float(model.logp_std),
-                'tpsa_mean': float(model.tpsa_mean),
-                'tpsa_std': float(model.tpsa_std),
-                'logp_loss': float(logp_loss.item()) if not mx.isnan(logp_loss) else -1,
-                'tpsa_loss': float(tpsa_loss.item()) if not mx.isnan(tpsa_loss) else -1,
-            }
-        
         # Weighted combination (no std² division needed since already normalized)
         property_loss = logp_weight * logp_loss + tpsa_weight * tpsa_loss
         property_kl = mx.array(0.0)  # Not used anymore
@@ -314,10 +281,7 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     # Update parameters
     optimizer.update(model, grads)
     
-    # Return diagnostics if available
-    diag = stored_losses.get('diag', None)
-    
-    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae, logp_loss, tpsa_loss, diag
+    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae, logp_loss, tpsa_loss
 
 # Validation function
 def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
@@ -398,7 +362,7 @@ for epoch in range(start_epoch, total_epochs):
     
     for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae, logp_loss, tpsa_loss, diag = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight, args.logp_weight, args.tpsa_weight, batch_idx)
+        total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae, logp_loss, tpsa_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight, args.logp_weight, args.tpsa_weight, batch_idx)
         
         # Store losses
         epoch_losses.append(total_loss)
@@ -408,16 +372,6 @@ for epoch in range(start_epoch, total_epochs):
         epoch_tpsa_maes.append(tpsa_mae)
         epoch_logp_losses.append(logp_loss)
         epoch_tpsa_losses.append(tpsa_loss)
-        
-        # Print diagnostics on first batch
-        if diag is not None and batch_idx == 0:
-            print(f"\n=== DIAGNOSIS (Batch 0, Epoch {epoch+1}) ===")
-            print(f"predicted_properties: LogP [{diag['pred_logp_min']:.3f}, {diag['pred_logp_max']:.3f}], TPSA [{diag['pred_tpsa_min']:.3f}, {diag['pred_tpsa_max']:.3f}]")
-            print(f"batch_properties: LogP [{diag['batch_logp_min']:.3f}, {diag['batch_logp_max']:.3f}], TPSA [{diag['batch_tpsa_min']:.3f}, {diag['batch_tpsa_max']:.3f}]")
-            print(f"Normalization: LogP mean={diag['logp_mean']:.2f} std={diag['logp_std']:.2f}, TPSA mean={diag['tpsa_mean']:.2f} std={diag['tpsa_std']:.2f}")
-            print(f"Losses: LogP={diag['logp_loss']:.6f}, TPSA={diag['tpsa_loss']:.6f}")
-            print(f"NaN/Inf check: pred_nan={diag['pred_nan']}, pred_inf={diag['pred_inf']}, batch_nan={diag['batch_nan']}, batch_inf={diag['batch_inf']}")
-            print("="*50)
         
         # Update progress bar
         if batch_idx % 10 == 0:  # Update every 10 batches
