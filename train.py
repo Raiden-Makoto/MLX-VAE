@@ -26,7 +26,7 @@ parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs t
 parser.add_argument('--max_beta', type=float, default=1.0, help='Maximum beta value (CVAE best practice: 1.0 for full KL divergence)')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
-parser.add_argument('--property_weight', type=float, default=10.0, help='Weight for property prediction loss (CVAE requires high weight)')
+parser.add_argument('--property_weight', type=float, default=1.0, help='Weight for property prediction loss')
 parser.add_argument('--logp_weight', type=float, default=100.0, help='Separate weight for LogP (needs boost due to 25x smaller scale vs TPSA)')
 parser.add_argument('--tpsa_weight', type=float, default=1.0, help='Separate weight for TPSA')
 parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads (FIXED at 4)')
@@ -211,9 +211,9 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         logp_loss = mx.mean((predicted_properties[:, 0] - batch_properties[:, 0]) ** 2)
         tpsa_loss = mx.mean((predicted_properties[:, 1] - batch_properties[:, 1]) ** 2)
         
-        # Clip losses to prevent NaN
-        logp_loss = mx.clip(logp_loss, 0, 1e6)
-        tpsa_loss = mx.clip(tpsa_loss, 0, 1e6)
+        # Clip losses to prevent NaN and excessive gradients
+        logp_loss = mx.clip(logp_loss, 0, 5)  # Cap at reasonable value
+        tpsa_loss = mx.clip(tpsa_loss, 0, 5)
         
         # Weighted combination (no std² division needed since already normalized)
         property_loss = logp_weight * logp_loss + tpsa_weight * tpsa_loss
