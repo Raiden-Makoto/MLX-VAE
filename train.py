@@ -198,27 +198,24 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             kl_loss = -0.5 * mx.mean(1 + logvar_clipped - mu**2 - mx.exp(logvar_clipped))
         
         # Property prediction loss (ensures z encodes properties)
-        # IMPORTANT: batch_properties appear to be RAW (not normalized) based on diagnostics
-        # Normalize both predicted_properties and batch_properties to same scale
+        # Normalize batch_properties (they appear to be raw based on diagnostics)
+        batch_properties_normalized = mx.array([
+            [(batch_properties[i, 0] - model.logp_mean) / model.logp_std,
+             (batch_properties[i, 1] - model.tpsa_mean) / model.tpsa_std]
+            for i in range(batch_properties.shape[0])
+        ])
         
-        # Clip predicted_properties to prevent extreme values
+        # Normalize predicted_properties to same scale
         predicted_properties = mx.clip(predicted_properties, -100, 100)
+        predicted_properties_normalized = mx.array([
+            [(predicted_properties[i, 0] - model.logp_mean) / model.logp_std,
+             (predicted_properties[i, 1] - model.tpsa_mean) / model.tpsa_std]
+            for i in range(predicted_properties.shape[0])
+        ])
         
-        # Normalize predicted_properties and batch_properties to normalized space
-        pred_logp_normalized = (predicted_properties[:, 0] - model.logp_mean) / model.logp_std
-        pred_tpsa_normalized = (predicted_properties[:, 1] - model.tpsa_mean) / model.tpsa_std
-        
-        # Normalize batch_properties (in case they're raw)
-        batch_logp_normalized = (batch_properties[:, 0] - model.logp_mean) / model.logp_std
-        batch_tpsa_normalized = (batch_properties[:, 1] - model.tpsa_mean) / model.tpsa_std
-        
-        # Clip normalized values to prevent division issues
-        pred_logp_normalized = mx.clip(pred_logp_normalized, -10, 10)
-        pred_tpsa_normalized = mx.clip(pred_tpsa_normalized, -10, 10)
-        
-        # Separate MSE loss for LogP and TPSA (both now in normalized space)
-        logp_loss = mx.mean((pred_logp_normalized - batch_logp_normalized) ** 2)
-        tpsa_loss = mx.mean((pred_tpsa_normalized - batch_tpsa_normalized) ** 2)
+        # Separate MSE loss for LogP and TPSA (both in normalized space)
+        logp_loss = mx.mean((predicted_properties_normalized[:, 0] - batch_properties_normalized[:, 0]) ** 2)
+        tpsa_loss = mx.mean((predicted_properties_normalized[:, 1] - batch_properties_normalized[:, 1]) ** 2)
         
         # Clip losses to prevent NaN
         logp_loss = mx.clip(logp_loss, 0, 1e6)
