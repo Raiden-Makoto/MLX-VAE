@@ -194,12 +194,9 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             kl_loss = -0.5 * mx.mean(1 + logvar_clipped - mu**2 - mx.exp(logvar_clipped))
         
         # Property prediction loss (ensures z encodes properties)
-        # Normalize targets
-        normalized_targets = mx.array([
-            [(batch_properties[i, 0] - model.logp_mean) / model.logp_std, 
-             (batch_properties[i, 1] - model.tpsa_mean) / model.tpsa_std]
-            for i in range(batch_properties.shape[0])
-        ])
+        # batch_properties are already normalized (mean=0, std=1) from data preparation
+        # No need to normalize again - use batch_properties directly as targets
+        normalized_targets = batch_properties
         
         # Separate MSE loss for LogP and TPSA
         # Since properties are already normalized (mean=0, std=1), both should contribute equally
@@ -217,13 +214,13 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         property_kl = mx.array(0.0)  # Not used anymore
         
         # Compute per-property MAE for diagnostics
-        # Denormalize properties for MAE calculation
+        # Denormalize properties for MAE calculation (both pred and true are in normalized space)
         pred_logp = predicted_properties[:, 0] * model.logp_std + model.logp_mean
-        true_logp = normalized_targets[:, 0] * model.logp_std + model.logp_mean
+        true_logp = batch_properties[:, 0] * model.logp_std + model.logp_mean
         logp_mae = mx.mean(mx.abs(pred_logp - true_logp))
         
         pred_tpsa = predicted_properties[:, 1] * model.tpsa_std + model.tpsa_mean
-        true_tpsa = normalized_targets[:, 1] * model.tpsa_std + model.tpsa_mean
+        true_tpsa = batch_properties[:, 1] * model.tpsa_std + model.tpsa_mean
         tpsa_mae = mx.mean(mx.abs(pred_tpsa - true_tpsa))
         
         # Store losses for later (evaluate immediately)
