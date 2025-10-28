@@ -27,6 +27,8 @@ parser.add_argument('--max_beta', type=float, default=1.0, help='Maximum beta va
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
 parser.add_argument('--property_weight', type=float, default=10.0, help='Weight for property prediction loss (CVAE requires high weight)')
+parser.add_argument('--logp_weight', type=float, default=100.0, help='Separate weight for LogP (needs boost due to 25x smaller scale vs TPSA)')
+parser.add_argument('--tpsa_weight', type=float, default=1.0, help='Separate weight for TPSA')
 parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads (FIXED at 4)')
 parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers (FIXED at 4)')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
@@ -150,7 +152,7 @@ patience_counter = 0
 last_val_loss = float('inf')
 
 # Training function
-def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01, property_weight=1.0):
+def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01, property_weight=1.0, logp_weight=100.0, tpsa_weight=1.0):
     """Single training step"""
     # Store losses for access after computation
     stored_losses = {}
@@ -199,8 +201,11 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             for i in range(batch_properties.shape[0])
         ])
         
-        # MSE loss between predicted and target properties
-        property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
+        # Separate MSE loss for LogP and TPSA with different weights
+        # LogP has ~25x smaller std, so needs much higher weight
+        logp_loss = mx.mean((predicted_properties[:, 0] - normalized_targets[:, 0]) ** 2)
+        tpsa_loss = mx.mean((predicted_properties[:, 1] - normalized_targets[:, 1]) ** 2)
+        property_loss = logp_weight * logp_loss + tpsa_weight * tpsa_loss
         property_kl = mx.array(0.0)  # Not used anymore
         
         # Compute per-property MAE for diagnostics
@@ -334,7 +339,7 @@ for epoch in range(start_epoch, total_epochs):
     
     for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight)
+        total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight, args.logp_weight, args.tpsa_weight)
         
         # Store losses
         epoch_losses.append(total_loss)
