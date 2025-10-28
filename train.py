@@ -158,14 +158,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     stored_losses = {}
     
     def loss_fn(model):
-        # Normalize batch_properties once before passing to model
-        batch_properties_normalized_input = mx.array([
-            [(batch_properties[i, 0] - model.logp_mean) / model.logp_std,
-             (batch_properties[i, 1] - model.tpsa_mean) / model.tpsa_std]
-            for i in range(batch_properties.shape[0])
-        ])
-        
-        result = model(batch_data, properties=batch_properties_normalized_input, training=True, noise_std=noise_std)
+        # batch_properties are already normalized from data preparation
+        result = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
         logits, mu, logvar, predicted_properties, property_kl_mu, property_kl_logvar = result
         
         # Get reconstruction and diversity losses (skip KL from compute_loss)
@@ -201,7 +195,7 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             kl_loss = -0.5 * mx.mean(1 + logvar_clipped - mu**2 - mx.exp(logvar_clipped))
         
         # Property prediction loss (ensures z encodes properties)
-        # predicted_properties are in raw scale, normalize them
+        # batch_properties are normalized, predicted_properties are RAW - need to normalize predicted
         predicted_properties = mx.clip(predicted_properties, -100, 100)
         predicted_properties_normalized = mx.array([
             [(predicted_properties[i, 0] - model.logp_mean) / model.logp_std,
@@ -209,9 +203,9 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             for i in range(predicted_properties.shape[0])
         ])
         
-        # Both predicted and batch are now normalized - compare directly
-        logp_loss = mx.mean((predicted_properties_normalized[:, 0] - batch_properties_normalized_input[:, 0]) ** 2)
-        tpsa_loss = mx.mean((predicted_properties_normalized[:, 1] - batch_properties_normalized_input[:, 1]) ** 2)
+        # Compare both in normalized space
+        logp_loss = mx.mean((predicted_properties_normalized[:, 0] - batch_properties[:, 0]) ** 2)
+        tpsa_loss = mx.mean((predicted_properties_normalized[:, 1] - batch_properties[:, 1]) ** 2)
         
         # Clip losses to prevent NaN
         logp_loss = mx.clip(logp_loss, 0, 1e6)
