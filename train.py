@@ -193,9 +193,9 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             logvar_clipped = mx.clip(logvar, -10, 10)
             kl_loss = -0.5 * mx.mean(1 + logvar_clipped - mu**2 - mx.exp(logvar_clipped))
         
-        # Property prediction loss (ensures z encodes both properties)
-        # predicted_properties is [B, 2] with [logp, tpsa]
-        # batch_properties is [B, 2] with [logp, tpsa]
+        # Separate property prediction losses (both already normalized)
+        # predicted_properties is [B, 2] with [logp, tpsa] in normalized space
+        # batch_properties is [B, 2] with [logp, tpsa] in normalized space
         predicted_properties = mx.clip(predicted_properties, -10, 10)
         
         # Check for NaN/Inf
@@ -204,17 +204,12 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             logp_loss = mx.array(0.0)
             tpsa_loss = mx.array(0.0)
         else:
-            # Compare both properties
+            # Simple MSE in normalized space (no std² division needed)
             logp_loss = mx.mean((predicted_properties[:, 0] - batch_properties[:, 0]) ** 2)
             tpsa_loss = mx.mean((predicted_properties[:, 1] - batch_properties[:, 1]) ** 2)
-            
-            # Clip losses
-            logp_loss = mx.clip(logp_loss, 0, 1.0)
-            tpsa_loss = mx.clip(tpsa_loss, 0, 1.0)
         
-        # Combined property loss
-        property_loss = tpsa_weight * tpsa_loss + logp_weight * logp_loss
-        property_kl = mx.array(0.0)
+        # Combined property prediction loss
+        property_loss = logp_weight * logp_loss + tpsa_weight * tpsa_loss
         
         # Compute MAE for diagnostics
         if mx.any(mx.isnan(predicted_properties)) or mx.any(mx.isinf(predicted_properties)):
@@ -235,7 +230,6 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         stored_losses['kl'] = float(kl_loss.item())
         stored_losses['diversity'] = float(diversity_loss.item())
         stored_losses['property'] = float(property_loss.item())
-        stored_losses['property_kl'] = float(property_kl.item())
         stored_losses['logp_mae'] = float(logp_mae.item())
         stored_losses['tpsa_mae'] = float(tpsa_mae.item())
         stored_losses['logp_loss'] = float(logp_loss.item())
