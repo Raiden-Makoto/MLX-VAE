@@ -201,10 +201,13 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             for i in range(batch_properties.shape[0])
         ])
         
-        # Separate MSE loss for LogP and TPSA with different weights
-        # LogP has ~25x smaller std, so needs much higher weight
-        logp_loss = mx.mean((predicted_properties[:, 0] - normalized_targets[:, 0]) ** 2)
-        tpsa_loss = mx.mean((predicted_properties[:, 1] - normalized_targets[:, 1]) ** 2)
+        # Separate MSE loss for LogP and TPSA - normalize by std² for equal contribution
+        # Recommendation: Divide by std² to equalize gradient contributions
+        # This ensures both LogP (std=2.31) and TPSA (std=71.98) contribute equally
+        logp_loss = mx.mean((predicted_properties[:, 0] - normalized_targets[:, 0]) ** 2) / (model.logp_std ** 2)
+        tpsa_loss = mx.mean((predicted_properties[:, 1] - normalized_targets[:, 1]) ** 2) / (model.tpsa_std ** 2)
+        
+        # Now both properties contribute equally (both are MSE / std²)
         property_loss = logp_weight * logp_loss + tpsa_weight * tpsa_loss
         property_kl = mx.array(0.0)  # Not used anymore
         
@@ -226,6 +229,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         stored_losses['property_kl'] = float(property_kl.item())
         stored_losses['logp_mae'] = float(logp_mae.item())
         stored_losses['tpsa_mae'] = float(tpsa_mae.item())
+        stored_losses['logp_loss'] = float(logp_loss.item())
+        stored_losses['tpsa_loss'] = float(tpsa_loss.item())
         
         # Weighted total loss
         total_loss = recon_loss + beta * kl_loss + diversity_weight * diversity_loss + property_weight * property_loss
@@ -242,6 +247,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     property_loss = stored_losses['property']
     logp_mae = stored_losses['logp_mae']
     tpsa_mae = stored_losses['tpsa_mae']
+    logp_loss = stored_losses['logp_loss']
+    tpsa_loss = stored_losses['tpsa_loss']
     
     # Clip gradients to prevent explosion
     def clip_grads(grads):
@@ -260,7 +267,7 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     # Update parameters
     optimizer.update(model, grads)
     
-    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae
+    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae, logp_loss, tpsa_loss
 
 # Validation function
 def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
@@ -336,10 +343,12 @@ for epoch in range(start_epoch, total_epochs):
     
     epoch_logp_maes = []
     epoch_tpsa_maes = []
+    epoch_logp_losses = []
+    epoch_tpsa_losses = []
     
     for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight, args.logp_weight, args.tpsa_weight)
+        total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae, logp_loss, tpsa_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight, args.logp_weight, args.tpsa_weight)
         
         # Store losses
         epoch_losses.append(total_loss)
@@ -347,6 +356,8 @@ for epoch in range(start_epoch, total_epochs):
         epoch_kl_losses.append(kl_loss)
         epoch_logp_maes.append(logp_mae)
         epoch_tpsa_maes.append(tpsa_mae)
+        epoch_logp_losses.append(logp_loss)
+        epoch_tpsa_losses.append(tpsa_loss)
         
         # Update progress bar
         if batch_idx % 10 == 0:  # Update every 10 batches
@@ -368,8 +379,13 @@ for epoch in range(start_epoch, total_epochs):
     avg_logp_mae = sum(epoch_logp_maes) / len(epoch_logp_maes)
     avg_tpsa_mae = sum(epoch_tpsa_maes) / len(epoch_tpsa_maes)
     
-    # Print property prediction MAE diagnostics (per bugfix.md)
+    # Print property prediction MAE and loss diagnostics (per recommendations.md)
     print(f"\nEpoch {epoch+1}: LogP MAE={avg_logp_mae:.3f}, TPSA MAE={avg_tpsa_mae:.2f}")
+    
+    # Also track per-property loss (they should be comparable after std² normalization)
+    avg_logp_loss = sum(epoch_logp_losses) / len(epoch_logp_losses)
+    avg_tpsa_loss = sum(epoch_tpsa_losses) / len(epoch_tpsa_losses)
+    print(f"Per-property losses (normalized): LogP={avg_logp_loss:.4f}, TPSA={avg_tpsa_loss:.4f}")
     
     # Save best model if this is the best loss so far
     if final_loss < best_loss:
