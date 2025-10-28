@@ -28,7 +28,7 @@ class SelfiesTransformerVAE(nn.Module):
         self.latent_dim = latent_dim
         
         # Property conditioning layers - FILM architecture (best practice)
-        self.num_properties = 2  # logp, tpsa
+        self.num_properties = 1  # Only TPSA
         # Project properties to embedding_dim for FILM conditioning
         self.property_encoder = nn.Sequential(
             nn.Linear(self.num_properties, hidden_dim),
@@ -58,19 +58,15 @@ class SelfiesTransformerVAE(nn.Module):
         self.property_predictor = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, self.num_properties)  # Predict normalized logp, tpsa
+            nn.Linear(hidden_dim, self.num_properties)  # Predict normalized tpsa only
         )
         
         # Property normalization parameters (will be set from training)
-        self.logp_mean = None
-        self.logp_std = None
         self.tpsa_mean = None
         self.tpsa_std = None
 
     def set_property_normalization(self, logp_mean, logp_std, tpsa_mean, tpsa_std):
-        """Set property normalization parameters"""
-        self.logp_mean = logp_mean
-        self.logp_std = logp_std
+        """Set property normalization parameters (logp params ignored)"""
         self.tpsa_mean = tpsa_mean
         self.tpsa_std = tpsa_std
     
@@ -118,19 +114,17 @@ class SelfiesTransformerVAE(nn.Module):
         return logits, mu, logvar, predicted_properties, property_mu, property_logvar
 
     def generate_conditional(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
-        """Generate molecules with target LogP and TPSA values"""
-        print(f" Generating molecules with LogP={target_logp}, TPSA={target_tpsa}")
+        """Generate molecules with target TPSA values (LogP ignored)"""
+        print(f" Generating molecules with TPSA={target_tpsa}")
         
-        # Normalize properties if normalization params are set
-        if self.logp_mean is not None and self.logp_std is not None:
-            norm_logp = (target_logp - self.logp_mean) / self.logp_std
+        # Normalize TPSA if normalization params are set
+        if self.tpsa_mean is not None and self.tpsa_std is not None:
             norm_tpsa = (target_tpsa - self.tpsa_mean) / self.tpsa_std
         else:
-            norm_logp = target_logp
             norm_tpsa = target_tpsa
         
-        # Create property embeddings for FILM conditioning
-        properties_array = mx.array([[norm_logp, norm_tpsa]] * num_samples)
+        # Create property embeddings for FILM conditioning (TPSA only)
+        properties_array = mx.array([[norm_tpsa]] * num_samples)  # [num_samples, 1]
         property_embedding = self.property_encoder(properties_array)  # [num_samples, embedding_dim]
         
         # Sample z from property-conditioned distribution (best practice for CVAE)
