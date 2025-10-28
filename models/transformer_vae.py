@@ -54,11 +54,11 @@ class SelfiesTransformerVAE(nn.Module):
         # Note: MLX doesn't support direct bias manipulation, will use Xavier init
         
         # Property prediction head (CVAE requirement)
-        # Predict properties from latent code z
+        # Predict normalized properties from latent code z (since we train on normalized inputs)
         self.property_predictor = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, self.num_properties)  # Predict logp, tpsa
+            nn.Linear(hidden_dim, self.num_properties)  # Predict normalized logp, tpsa
         )
         
         # Property normalization parameters (will be set from training)
