@@ -195,47 +195,39 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             kl_loss = -0.5 * mx.mean(1 + logvar_clipped - mu**2 - mx.exp(logvar_clipped))
         
         # Property prediction loss (ensures z encodes properties)
-        # Both batch_properties and predicted_properties are now in normalized space (mean=0, std=1)
-        # Clip to prevent extreme values
+        # Clip predicted properties to prevent extreme values first
         predicted_properties = mx.clip(predicted_properties, -10, 10)
         
-        # Debug: Print first batch to see if predicted_properties are actually normalized
-        if batch_idx == 0 and stored_losses.get('debug_printed', False) == False:
-            print(f"\nDEBUG: batch_properties (first 3): {batch_properties[:3]}")
-            print(f"DEBUG: predicted_properties (first 3): {predicted_properties[:3]}")
-            print(f"DEBUG: batch properties range: [{mx.min(batch_properties[:, 0]).item():.3f}, {mx.max(batch_properties[:, 0]).item():.3f}]")
-            print(f"DEBUG: predicted properties range: [{mx.min(predicted_properties[:, 0]).item():.3f}, {mx.max(predicted_properties[:, 0]).item():.3f}]")
-            stored_losses['debug_printed'] = True
-        
-        # Compare directly in normalized space
-        logp_loss = mx.mean((predicted_properties[:, 0] - batch_properties[:, 0]) ** 2)
-        tpsa_loss = mx.mean((predicted_properties[:, 1] - batch_properties[:, 1]) ** 2)
-        
-        # Clip losses to prevent NaN and excessive gradients
-        logp_loss = mx.clip(logp_loss, 0, 5)  # Cap at reasonable value
-        tpsa_loss = mx.clip(tpsa_loss, 0, 5)
+        # Check for NaN/Inf immediately after prediction
+        if mx.any(mx.isnan(predicted_properties)) or mx.any(mx.isinf(predicted_properties)):
+            # If NaN/Inf detected, skip this loss component
+            print(f"WARNING: predicted_properties contains NaN/Inf - skipping property loss")
+            logp_loss = mx.array(0.0)
+            tpsa_loss = mx.array(0.0)
+        else:
+            # Compare directly in normalized space
+            logp_loss = mx.mean((predicted_properties[:, 0] - batch_properties[:, 0]) ** 2)
+            tpsa_loss = mx.mean((predicted_properties[:, 1] - batch_properties[:, 1]) ** 2)
+            
+            # Clip losses to prevent excessive gradients
+            logp_loss = mx.clip(logp_loss, 0, 1.0)  # Cap at 1.0
+            tpsa_loss = mx.clip(tpsa_loss, 0, 1.0)
         
         # Weighted combination (no std² division needed since already normalized)
         property_loss = logp_weight * logp_loss + tpsa_weight * tpsa_loss
         property_kl = mx.array(0.0)  # Not used anymore
         
-        # Compute per-property MAE for diagnostics
-        # Check for NaN/Inf in predicted_properties first
+        # Compute per-property MAE for diagnostics (skip if NaN)
         if mx.any(mx.isnan(predicted_properties)) or mx.any(mx.isinf(predicted_properties)):
-            print(f"WARNING: predicted_properties contains NaN/Inf")
-            logp_mae = mx.array(999.0)  # Large dummy value
+            logp_mae = mx.array(999.0)
             tpsa_mae = mx.array(999.0)
         else:
             # Denormalize for MAE (predicted and batch are both in normalized space)
-            # Denormalize predicted properties
             pred_logp_raw = predicted_properties[:, 0] * model.logp_std + model.logp_mean
             pred_tpsa_raw = predicted_properties[:, 1] * model.tpsa_std + model.tpsa_mean
-            
-            # batch_properties are normalized, denormalize them
             batch_logp_raw = batch_properties[:, 0] * model.logp_std + model.logp_mean
             batch_tpsa_raw = batch_properties[:, 1] * model.tpsa_std + model.tpsa_mean
             
-            # Compute MAE in raw space for interpretability
             logp_mae = mx.mean(mx.abs(pred_logp_raw - batch_logp_raw))
             tpsa_mae = mx.mean(mx.abs(pred_tpsa_raw - batch_tpsa_raw))
         
