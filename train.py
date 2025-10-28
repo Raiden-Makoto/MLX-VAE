@@ -203,12 +203,24 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
         property_kl = mx.array(0.0)  # Not used anymore
         
+        # Compute per-property MAE for diagnostics
+        # Denormalize properties for MAE calculation
+        pred_logp = predicted_properties[:, 0] * model.logp_std + model.logp_mean
+        true_logp = normalized_targets[:, 0] * model.logp_std + model.logp_mean
+        logp_mae = mx.mean(mx.abs(pred_logp - true_logp))
+        
+        pred_tpsa = predicted_properties[:, 1] * model.tpsa_std + model.tpsa_mean
+        true_tpsa = normalized_targets[:, 1] * model.tpsa_std + model.tpsa_mean
+        tpsa_mae = mx.mean(mx.abs(pred_tpsa - true_tpsa))
+        
         # Store losses for later (evaluate immediately)
         stored_losses['recon'] = float(recon_loss.item())
         stored_losses['kl'] = float(kl_loss.item())
         stored_losses['diversity'] = float(diversity_loss.item())
         stored_losses['property'] = float(property_loss.item())
         stored_losses['property_kl'] = float(property_kl.item())
+        stored_losses['logp_mae'] = float(logp_mae.item())
+        stored_losses['tpsa_mae'] = float(tpsa_mae.item())
         
         # Weighted total loss
         total_loss = recon_loss + beta * kl_loss + diversity_weight * diversity_loss + property_weight * property_loss
@@ -223,6 +235,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     kl_loss = stored_losses['kl']
     diversity_loss = stored_losses['diversity']
     property_loss = stored_losses['property']
+    logp_mae = stored_losses['logp_mae']
+    tpsa_mae = stored_losses['tpsa_mae']
     
     # Clip gradients to prevent explosion
     def clip_grads(grads):
@@ -241,7 +255,7 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     # Update parameters
     optimizer.update(model, grads)
     
-    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss
+    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae
 
 # Validation function
 def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
@@ -315,14 +329,19 @@ for epoch in range(start_epoch, total_epochs):
         leave=False
     )
     
+    epoch_logp_maes = []
+    epoch_tpsa_maes = []
+    
     for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
         # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss, property_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight)
+        total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight)
         
         # Store losses
         epoch_losses.append(total_loss)
         epoch_recon_losses.append(recon_loss)
         epoch_kl_losses.append(kl_loss)
+        epoch_logp_maes.append(logp_mae)
+        epoch_tpsa_maes.append(tpsa_mae)
         
         # Update progress bar
         if batch_idx % 10 == 0:  # Update every 10 batches
@@ -341,6 +360,11 @@ for epoch in range(start_epoch, total_epochs):
     final_loss = mx.mean(mx.array(epoch_losses)).item()
     final_recon = mx.mean(mx.array(epoch_recon_losses)).item()
     final_kl = mx.mean(mx.array(epoch_kl_losses)).item()
+    avg_logp_mae = sum(epoch_logp_maes) / len(epoch_logp_maes)
+    avg_tpsa_mae = sum(epoch_tpsa_maes) / len(epoch_tpsa_maes)
+    
+    # Print property prediction MAE diagnostics (per bugfix.md)
+    print(f"\nEpoch {epoch+1}: LogP MAE={avg_logp_mae:.3f}, TPSA MAE={avg_tpsa_mae:.2f}")
     
     # Save best model if this is the best loss so far
     if final_loss < best_loss:

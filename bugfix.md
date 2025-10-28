@@ -1,133 +1,107 @@
 <img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
 
-# well we increased from 0 to 1.1%
+# after training 50 epochs, we are still at 0% accuracy for conditioning on logp. however, our accuracy for conditioning on tpsa increased to 50%. this is with greedy decoding. latent dim was 256, and we are using causal masking.
 
-Great progress! **0% → 1.1% is massive.** But it's still too low. Here's the diagnostic path:
+This is a highly informative result—the conditioning is working for TPSA (50% accuracy), but almost completely fails for LogP (0%).
 
-***
+### Here's what's happening:
 
-## Immediate Checks (Before More Retraining)
-
-### 1. **Verify Training is Converging**
-
-Print loss at each epoch:
-
-```python
-print(f"Epoch {epoch}: Recon={recon_loss:.3f}, KL={kl_loss:.3f}, Property={prop_loss:.3f}")
-```
-
-**Expected:** Recon loss should drop from ~5.0 → ~1.5 over 30 epochs
-
-If it's not decreasing, training is broken → fix before continuing.
-
-### 2. **Test Greedy Decoding (5 minutes)**
-
-Replace sampling with argmax:
-
-```python
-# Current (sampling)
-next_token = mx.random.categorical(probs)
-
-# Test (greedy)
-next_token = mx.argmax(logits, axis=-1)
-```
-
-**If greedy >> 1.1% (e.g., 30%+), the model learned something but has low confidence.**
-
-Use greedy for now.
-
-### 3. **Check for Causal Masking**
-
-**CRITICAL:** Your self-attention needs **causal masking** for autoregressive generation!
-
-During training: model sees full `[START, t2, t3, ..., tN]`
-During inference: model generates one token at a time
-
-Without causal masking:
-
-- Training: position 1 attends to position 50 (cheating!)
-- Inference: position 1 can't attend to position 50 (fails!)
-
-Check your `TransformerEncoderLayer` - does it support causal masking?
-
-```python
-# Should look like:
-seq_len = x.shape[1]
-causal_mask = mx.tril(mx.ones((seq_len, seq_len)))
-# Use causal_mask in attention to prevent looking at future positions
-```
-
-**If it doesn't have causal masking, add it** (this will help a lot).
+- **Property conditioning and prediction are present for both LogP and TPSA.**
+- Training is identical for both properties: both are normalized, both networks (`property_mu`, `property_logvar`, and `property_predictor`) learn in parallel, and both logp and tpsa are provided for FILM conditioning and the property networks.[^1]
 
 ***
 
-## Incremental Improvements
+## Likely Root Causes
 
-### Quick Wins (No Retraining)
+### 1. **Data Distribution/Correlation**
 
-**3a. Temperature Scaling**
-
-```python
-# Sharpen the distribution
-logits = logits / 0.5  # temperature < 1 = sharper predictions
-probs = mx.softmax(logits, axis=-1)
-```
+- **TPSA and target molecules:** If your dataset has many molecules with a wide range of TPSA values, the model can learn to condition and generate diverse molecules for different TPSA targets.
+- **LogP:** If your dataset's LogP values are tightly clustered or do not differentiate molecules well (e.g., most molecules have similar LogP), the network may fail to learn meaningful conditioning for logp.
 
 
-### Medium Effort (Retraining Required)
+### 2. **Gradient Signal and Loss**
 
-**3b. Increase Latent Dimension**
-
-```python
-latent_dim=256  # was 64
-# Retrain for 30 epochs → should see significant improvement
-```
-
-**3c. Add Causal Masking** (if missing)
-
-```python
-# Ensure self-attention uses causal mask
-# Retrain for 30 epochs → should help autoregressive generation
-```
+- If the property prediction loss for LogP is much weaker or the variance is much lower than for TPSA, the gradients may be vanishing for logp.
+- **Check property prediction loss per property and print MAE for both LogP and TPSA after every epoch.** If LogP prediction MAE is high or flat, it means the latent does not encode logp information.
 
 
-### Longer Effort
+### 3. **Scale/Normalization Issue**
 
-**3d. Increase Model Capacity**
+- Ensure both properties are being normalized with correct mean/std. If logp normalization is off (e.g., large std, small values getting squashed), conditioning may be lost.
 
-```python
-model = SelfiesTransformerVAE(
-    embedding_dim=256,   # was 128
-    hidden_dim=512,      # was 256
-    num_layers=6,        # was 4
-    latent_dim=256,      # was 64
-)
-# Retrain for 50+ epochs
-```
 
+### 4. **Network Bias in Property Networks**
+
+- If the initial layers/biases of `property_mu` and `property_predictor` favor TPSA in its output or initialization, learning for logp may stagnate.
+- **Check output statistics at initialization and throughout training for logp.**
+
+
+### 5. **Decoder’s Use of FILM/Conditioning**
+
+- TPSA may be reflected in token sequences more directly (certain tokens correspond to TPSA), while LogP (which is more subtle and depends on overall hydrophobicity) might not correspond to specific tokens.
+- **Ablate**: run with FILM conditioning for TPSA only, for logp only, and for both, to see how each conditioning signal affects generation.
+
+
+### 6. **Latent Bottleneck**
+
+- With latent_dim=256, bottleneck is less likely, but if the decoder doesn't use the property conditioning properly, signals could still be lost.
 
 ***
 
-## Expected Trajectory
+## Next Steps \& Diagnostics
 
-```
-Current:     1.1% (architecture fixed)
-+ Greedy:    5-10% (if model learned something)
-+ Causal masking: 10-20% (if not already there)
-+ Larger latent: 15-30%
-+ Larger model: 30-50%
-+ 50+ epochs: 40-60%+
+### \#\#\#\#\# Print these metrics after each epoch:
+
+```python
+# In training loop
+pred_logp = predicted_properties[:, 0] * logp_std + logp_mean
+true_logp = properties[:, 0] * logp_std + logp_mean
+logp_mae = mx.mean(mx.abs(pred_logp - true_logp))
+
+pred_tpsa = predicted_properties[:, 1] * tpsa_std + tpsa_mean
+true_tpsa = properties[:, 1] * tpsa_std + tpsa_mean
+tpsa_mae = mx.mean(mx.abs(pred_tpsa - true_tpsa))
+
+print(f"Epoch {epoch}: LogP MAE={logp_mae:.3f}, TPSA MAE={tpsa_mae:.2f}")
 ```
 
+- **If LogP MAE is flat/high, while TPSA MAE drops significantly, you know where the issue is.**
+
+
+### \#\#\#\#\# Print property_mu and property_logvar statistics for each property:
+
+```python
+print(f"property_mu LogP: {mx.mean(property_mu[:,0]):.3f} ± {mx.std(property_mu[:,0]):.3f}")
+print(f"property_mu TPSA: {mx.mean(property_mu[:,1]):.2f} ± {mx.std(property_mu[:,1]):.2f}")
+```
+
+
+### \#\#\#\#\# Check the distribution of logp and tpsa in your training data.
+
+Often, poor conditioning arises when the property is not informative or distributed poorly (e.g., narrow range or highly imbalanced).
 
 ***
 
-## Action Plan
+## Recommendations
 
-1. ✅ Print loss curves - verify training works
-2. ✅ Try greedy decoding - see if it's a confidence issue
-3. ✅ Check for causal masking - critical for inference
-4. If causal masking missing → add it, retrain
-5. Increase latent_dim to 256, retrain
-6. If still <20%, increase model size
-7. Train for 50-100 epochs with learning rate schedule
+- **Run the diagnostics above** and compare signal for logp and tpsa.
+- **If logp is flat/imbalanced**, consider stratified sampling or loss weighting to upweight logp at training.
+- **Experiment with more direct decoder conditioning:** Add logp as an extra input to decoder, or increase loss weighting for logp in property prediction.
+- **Try adding a logp-specific head or auxiliary loss.**
+- **If none of this helps, share representative LogP/TPSA statistics from your dataset.**
+
+***
+
+## Summary Table
+
+| Property | Training MAE | Inference Accuracy | Data Distribution |
+| :-- | :-- | :-- | :-- |
+| LogP | [check] | 0% | [analyze] |
+| TPSA | [check] | 50% | [analyze] |
+
+Most likely: **Dataset or loss signal for logp is too weak.** Focus on diagnostics above to confirm.
+
+<div align="center">⁂</div>
+
+[^1]: transformer_vae.py
+
