@@ -45,18 +45,16 @@ idx_to_token = meta['idx_to_token']
 vocab_size = meta['vocab_size']
 max_length = meta['max_length']
 
-# Load properties and normalize
+# Load properties and normalize (TPSA only)
 molecules = meta['molecules']
-properties_raw = np.array([[mol['logp'], mol['tpsa']] for mol in molecules], dtype=np.float32)
+properties_raw = np.array([[mol['tpsa']] for mol in molecules], dtype=np.float32)
 
 # Normalize properties (zero mean, unit variance)
-logp_mean = np.mean(properties_raw[:, 0])
-logp_std = np.std(properties_raw[:, 0])
-tpsa_mean = np.mean(properties_raw[:, 1])
-tpsa_std = np.std(properties_raw[:, 1])
+tpsa_mean = np.mean(properties_raw[:, 0])
+tpsa_std = np.std(properties_raw[:, 0])
 
 properties = np.array([
-    [(prop[0] - logp_mean) / logp_std, (prop[1] - tpsa_mean) / tpsa_std]
+    [(prop[0] - tpsa_mean) / tpsa_std]
     for prop in properties_raw
 ], dtype=np.float32)
 
@@ -103,7 +101,7 @@ model = SelfiesTransformerVAE(
 )
 
 # Set property normalization
-model.set_property_normalization(logp_mean, logp_std, tpsa_mean, tpsa_std)
+model.set_property_normalization(0.0, 1.0, tpsa_mean, tpsa_std)  # LogP params ignored
 optimizer = Adam(learning_rate=args.learning_rate)
 
 # Create output directory
@@ -136,8 +134,7 @@ if args.resume:
             with open(norm_file, 'r') as f:
                 norm_stats = json.load(f)
             model.set_property_normalization(
-                norm_stats['logp_mean'],
-                norm_stats['logp_std'],
+                0.0, 1.0,  # LogP params ignored
                 norm_stats['tpsa_mean'],
                 norm_stats['tpsa_std']
             )
@@ -388,8 +385,6 @@ for epoch in range(start_epoch, total_epochs):
         # Also save normalization stats and architecture params
         import json
         norm_stats = {
-            'logp_mean': float(logp_mean),
-            'logp_std': float(logp_std),
             'tpsa_mean': float(tpsa_mean),
             'tpsa_std': float(tpsa_std),
             # Save architecture parameters to ensure consistent loading

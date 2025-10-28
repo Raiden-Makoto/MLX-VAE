@@ -73,8 +73,7 @@ def load_best_model(checkpoint_dir='checkpoints', **model_kwargs):
         
         model = SelfiesTransformerVAE(**model_kwargs_from_checkpoint)
         model.set_property_normalization(
-            norm_stats['logp_mean'],
-            norm_stats['logp_std'],
+            0.0, 1.0,  # LogP params ignored
             norm_stats['tpsa_mean'],
             norm_stats['tpsa_std']
         )
@@ -92,6 +91,8 @@ def load_best_model(checkpoint_dir='checkpoints', **model_kwargs):
         }
         default_kwargs.update(model_kwargs)
         model = SelfiesTransformerVAE(**default_kwargs)
+        # Set dummy normalization for TPSA
+        model.set_property_normalization(0.0, 1.0, 1.0, 1.0)
     
     model.load_weights(best_model_path)
     
@@ -212,12 +213,11 @@ if __name__ == "__main__":
         print(f"  {i+1}: {selfies}")
 
 def generate_conditional_molecules(model, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
-    """Generate molecules with target LogP and TPSA values"""
+    """Generate molecules with target TPSA value (LogP ignored)"""
     print(f" Generating {num_samples} molecules with:")
-    print(f"   LogP: {target_logp}")
     print(f"   TPSA: {target_tpsa}")
     
-    # Generate conditional samples
+    # Generate conditional samples (target_logp ignored by model)
     samples = model.generate_conditional(target_logp, target_tpsa, num_samples, temperature, top_k)
     
     # Convert to SELFIES
@@ -246,35 +246,27 @@ def generate_conditional_molecules(model, target_logp, target_tpsa, num_samples=
     return valid_molecules
 
 def analyze_logp_tpsa_accuracy(molecules, target_logp, target_tpsa):
-    """Analyze how well generated molecules match LogP and TPSA targets"""
+    """Analyze how well generated molecules match TPSA target (LogP ignored)"""
     if not molecules:
         return {}
     
-    logp_values = [m.get('logp', 0) for m in molecules if 'logp' in m and m['logp'] > 0]
     tpsa_values = [m.get('tpsa', 0) for m in molecules if 'tpsa' in m and m['tpsa'] > 0]
     
-    if not logp_values or not tpsa_values:
-        print(" No valid property values to analyze")
+    if not tpsa_values:
+        print(" No valid TPSA values to analyze")
         return {}
     
-    logp_mean = sum(logp_values) / len(logp_values)
     tpsa_mean = sum(tpsa_values) / len(tpsa_values)
     
-    logp_error = abs(logp_mean - target_logp)
     tpsa_error = abs(tpsa_mean - target_tpsa)
     
     print(f"\n CONDITIONAL GENERATION ANALYSIS")
     print(f"=" * 40)
-    print(f"Target LogP: {target_logp:.2f}")
-    print(f"Generated LogP: {logp_mean:.2f} ± {logp_error:.2f}")
     print(f"Target TPSA: {target_tpsa:.2f}")
     print(f"Generated TPSA: {tpsa_mean:.2f} ± {tpsa_error:.2f}")
-    print(f"LogP Accuracy: {max(0, 1 - logp_error/2):.1%}")
     print(f"TPSA Accuracy: {max(0, 1 - tpsa_error/50):.1%}")
     
     return {
-        'logp_mean': logp_mean,
         'tpsa_mean': tpsa_mean,
-        'logp_error': logp_error,
         'tpsa_error': tpsa_error
     }

@@ -159,8 +159,6 @@ def main():
     # Conditional generation arguments (DEFAULT)
     parser.add_argument('--regular', action='store_true',
                        help='Use regular generation instead of conditional')
-    parser.add_argument('--logp', type=float, default=3.19,
-                       help='Target LogP value for conditional generation (default: 3.19)')
     parser.add_argument('--tpsa', type=float, default=82.49,
                        help='Target TPSA value for conditional generation (default: 82.49)')
     parser.add_argument('--analyze', action='store_true', default=True,
@@ -212,7 +210,6 @@ def main():
         # CONDITIONAL GENERATION (DEFAULT)
         print(" CONDITIONAL MOLECULAR GENERATION")
         print("="*50)
-        print(f"Target LogP: {args.logp}")
         print(f"Target TPSA: {args.tpsa}")
         print(f"Number of samples: {args.num_samples}")
         print(f"Temperature: {args.temperature}")
@@ -225,9 +222,9 @@ def main():
         print(" Model loaded successfully!")
         print()
         
-        # Generate conditional molecules
+        # Generate conditional molecules (pass 0 for logp as it's ignored)
         molecules = generate_conditional_molecules(
-            model, args.logp, args.tpsa, args.num_samples, 
+            model, 0.0, args.tpsa, args.num_samples, 
             args.temperature, args.top_k
         )
         
@@ -240,7 +237,7 @@ def main():
         # Analyze accuracy (default behavior)
         if args.analyze:
             print("\n Analyzing conditional generation accuracy...")
-            analyze_logp_tpsa_accuracy(molecules, args.logp, args.tpsa)
+            analyze_logp_tpsa_accuracy(molecules, 0.0, args.tpsa)
         
         # Convert to DataFrame for consistent processing
         df = pd.DataFrame(molecules)
