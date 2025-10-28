@@ -71,6 +71,10 @@ args.num_heads = 4
 tokenized_mx = mx.array(tokenized)
 properties_mx = mx.array(properties)
 
+# Debug: Check if properties are normalized
+print(f"DEBUG: Properties range - LogP: [{np.min(properties[:, 0]):.3f}, {np.max(properties[:, 0]):.3f}], TPSA: [{np.min(properties[:, 1]):.3f}, {np.max(properties[:, 1]):.3f}]")
+print(f"DEBUG: If normalized, both should be in range [-3, 3]. If raw LogP [-20, 50], TPSA [0, 2000]")
+
 # Use create_batches from dataloader, but pair with properties
 # Shuffle data and properties together
 if True:  # Always shuffle
