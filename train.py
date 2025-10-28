@@ -198,13 +198,24 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         # predicted_properties are RAW, so normalize them before comparing
         normalized_targets = batch_properties
         
+        # Clip predicted_properties to prevent extreme values
+        predicted_properties = mx.clip(predicted_properties, -100, 100)
+        
         # Normalize predicted_properties to match batch_properties scale
         pred_logp_normalized = (predicted_properties[:, 0] - model.logp_mean) / model.logp_std
         pred_tpsa_normalized = (predicted_properties[:, 1] - model.tpsa_mean) / model.tpsa_std
         
+        # Clip normalized values to prevent division issues
+        pred_logp_normalized = mx.clip(pred_logp_normalized, -10, 10)
+        pred_tpsa_normalized = mx.clip(pred_tpsa_normalized, -10, 10)
+        
         # Separate MSE loss for LogP and TPSA (both now in normalized space)
         logp_loss = mx.mean((pred_logp_normalized - batch_properties[:, 0]) ** 2)
         tpsa_loss = mx.mean((pred_tpsa_normalized - batch_properties[:, 1]) ** 2)
+        
+        # Clip losses to prevent NaN
+        logp_loss = mx.clip(logp_loss, 0, 1e6)
+        tpsa_loss = mx.clip(tpsa_loss, 0, 1e6)
         
         # Debug: Check if predicted_properties are in expected range
         if batch_data.shape[0] == args.batch_size:  # Only log first batch
@@ -216,15 +227,21 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         property_kl = mx.array(0.0)  # Not used anymore
         
         # Compute per-property MAE for diagnostics
-        # Denormalize predicted_properties to raw scale, then compare with denormalized batch_properties
-        # batch_properties are normalized, so denormalize them back to raw for MAE
-        pred_logp_raw = predicted_properties[:, 0]  # Already in raw scale
-        true_logp_raw = batch_properties[:, 0] * model.logp_std + model.logp_mean  # Denormalize batch_properties
-        logp_mae = mx.mean(mx.abs(pred_logp_raw - true_logp_raw))
-        
-        pred_tpsa_raw = predicted_properties[:, 1]  # Already in raw scale
-        true_tpsa_raw = batch_properties[:, 1] * model.tpsa_std + model.tpsa_mean  # Denormalize batch_properties
-        tpsa_mae = mx.mean(mx.abs(pred_tpsa_raw - true_tpsa_raw))
+        # Check for NaN/Inf in predicted_properties first
+        if mx.any(mx.isnan(predicted_properties)) or mx.any(mx.isinf(predicted_properties)):
+            print(f"WARNING: predicted_properties contains NaN/Inf")
+            logp_mae = mx.array(999.0)  # Large dummy value
+            tpsa_mae = mx.array(999.0)
+        else:
+            # Denormalize predicted_properties to raw scale, then compare with denormalized batch_properties
+            # batch_properties are normalized, so denormalize them back to raw for MAE
+            pred_logp_raw = predicted_properties[:, 0]  # Already in raw scale
+            true_logp_raw = batch_properties[:, 0] * model.logp_std + model.logp_mean  # Denormalize batch_properties
+            logp_mae = mx.mean(mx.abs(pred_logp_raw - true_logp_raw))
+            
+            pred_tpsa_raw = predicted_properties[:, 1]  # Already in raw scale
+            true_tpsa_raw = batch_properties[:, 1] * model.tpsa_std + model.tpsa_mean  # Denormalize batch_properties
+            tpsa_mae = mx.mean(mx.abs(pred_tpsa_raw - true_tpsa_raw))
         
         # Store losses for later (evaluate immediately)
         stored_losses['recon'] = float(recon_loss.item())
