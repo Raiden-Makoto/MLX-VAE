@@ -201,13 +201,18 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             for i in range(batch_properties.shape[0])
         ])
         
-        # Separate MSE loss for LogP and TPSA - normalize by std² for equal contribution
-        # Recommendation: Divide by std² to equalize gradient contributions
-        # This ensures both LogP (std=2.31) and TPSA (std=71.98) contribute equally
-        logp_loss = mx.mean((predicted_properties[:, 0] - normalized_targets[:, 0]) ** 2) / (model.logp_std ** 2)
-        tpsa_loss = mx.mean((predicted_properties[:, 1] - normalized_targets[:, 1]) ** 2) / (model.tpsa_std ** 2)
+        # Separate MSE loss for LogP and TPSA
+        # Since properties are already normalized (mean=0, std=1), both should contribute equally
+        # No need to divide by std² again (they're already on same scale)
+        logp_loss = mx.mean((predicted_properties[:, 0] - normalized_targets[:, 0]) ** 2)
+        tpsa_loss = mx.mean((predicted_properties[:, 1] - normalized_targets[:, 1]) ** 2)
         
-        # Now both properties contribute equally (both are MSE / std²)
+        # Debug: Check if predicted_properties are in expected range
+        if batch_data.shape[0] == args.batch_size:  # Only log first batch
+            stored_losses['pred_logp_range'] = f"{float(mx.min(predicted_properties[:, 0]).item()):.3f} to {float(mx.max(predicted_properties[:, 0]).item()):.3f}"
+            stored_losses['pred_tpsa_range'] = f"{float(mx.min(predicted_properties[:, 1]).item()):.3f} to {float(mx.max(predicted_properties[:, 1]).item()):.3f}"
+        
+        # Weighted combination (no std² division needed since already normalized)
         property_loss = logp_weight * logp_loss + tpsa_weight * tpsa_loss
         property_kl = mx.array(0.0)  # Not used anymore
         
@@ -382,10 +387,10 @@ for epoch in range(start_epoch, total_epochs):
     # Print property prediction MAE and loss diagnostics (per recommendations.md)
     print(f"\nEpoch {epoch+1}: LogP MAE={avg_logp_mae:.3f}, TPSA MAE={avg_tpsa_mae:.2f}")
     
-    # Also track per-property loss (they should be comparable after std² normalization)
+    # Also track per-property loss (they should be comparable since already normalized)
     avg_logp_loss = sum(epoch_logp_losses) / len(epoch_logp_losses)
     avg_tpsa_loss = sum(epoch_tpsa_losses) / len(epoch_tpsa_losses)
-    print(f"Per-property losses (normalized): LogP={avg_logp_loss:.4f}, TPSA={avg_tpsa_loss:.4f}")
+    print(f"Per-property losses: LogP={avg_logp_loss:.4f}, TPSA={avg_tpsa_loss:.4f}")
     
     # Save best model if this is the best loss so far
     if final_loss < best_loss:
