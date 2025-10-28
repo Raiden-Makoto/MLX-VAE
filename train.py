@@ -195,14 +195,16 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         
         # Property prediction loss (ensures z encodes properties)
         # batch_properties are already normalized (mean=0, std=1) from data preparation
-        # No need to normalize again - use batch_properties directly as targets
+        # predicted_properties are RAW, so normalize them before comparing
         normalized_targets = batch_properties
         
-        # Separate MSE loss for LogP and TPSA
-        # Since properties are already normalized (mean=0, std=1), both should contribute equally
-        # No need to divide by std² again (they're already on same scale)
-        logp_loss = mx.mean((predicted_properties[:, 0] - normalized_targets[:, 0]) ** 2)
-        tpsa_loss = mx.mean((predicted_properties[:, 1] - normalized_targets[:, 1]) ** 2)
+        # Normalize predicted_properties to match batch_properties scale
+        pred_logp_normalized = (predicted_properties[:, 0] - model.logp_mean) / model.logp_std
+        pred_tpsa_normalized = (predicted_properties[:, 1] - model.tpsa_mean) / model.tpsa_std
+        
+        # Separate MSE loss for LogP and TPSA (both now in normalized space)
+        logp_loss = mx.mean((pred_logp_normalized - batch_properties[:, 0]) ** 2)
+        tpsa_loss = mx.mean((pred_tpsa_normalized - batch_properties[:, 1]) ** 2)
         
         # Debug: Check if predicted_properties are in expected range
         if batch_data.shape[0] == args.batch_size:  # Only log first batch
