@@ -5,10 +5,12 @@ import numpy as np
 import json
 from sklearn.decomposition import PCA
 import matplotlib.pyplot as plt
+import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).parent.parent))
+
 from models.transformer_vae import SelfiesTransformerVAE
-from mlx_data.dataloader import load_data
 
 
 def load_model_and_data():
@@ -23,9 +25,18 @@ def load_model_and_data():
     with open(norm_file, 'r') as f:
         norm_stats = json.load(f)
     
-    # Load data
+    # Load tokenized sequences
     print("Loading data...")
-    data_mx, vocab = load_data()
+    tokenized = np.load('mlx_data/chembl_cns_tokenized.npy')
+    
+    # Load vocabulary from JSON file
+    meta_file = Path("mlx_data/chembl_cns_selfies.json")
+    with open(meta_file, 'r') as f:
+        data = json.load(f)
+    
+    vocab = data['idx_to_token']
+    molecules = data['molecules']
+    properties = np.array([[mol['logp'], mol['tpsa']] for mol in molecules], dtype=np.float32)
     
     # Initialize model with saved architecture
     model = SelfiesTransformerVAE(
@@ -54,15 +65,7 @@ def load_model_and_data():
     else:
         raise FileNotFoundError(f"Model weights not found at {best_model_path}")
     
-    # Load properties
-    meta_file = Path("mlx_data/chembl_cns_selfies.json")
-    with open(meta_file, 'r') as f:
-        data = json.load(f)
-    
-    molecules = data['molecules']
-    properties = np.array([[mol['logp'], mol['tpsa']] for mol in molecules], dtype=np.float32)
-    
-    return model, data_mx, properties, vocab
+    return model, tokenized, properties, vocab
 
 
 def extract_latents(model, sequences, properties, batch_size=128):
@@ -97,6 +100,12 @@ def extract_latents(model, sequences, properties, batch_size=128):
     properties_array = np.concatenate(properties_list, axis=0)
     
     print(f"Extracted {latents.shape[0]} latent codes of dimension {latents.shape[1]}")
+    
+    # Clean latents (remove NaN/Inf)
+    latents = np.nan_to_num(latents, nan=0.0, posinf=1e6, neginf=-1e6)
+    
+    # Remove any remaining outliers
+    latents = np.clip(latents, -10, 10)
     
     return latents, properties_array
 
