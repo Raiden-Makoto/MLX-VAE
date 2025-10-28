@@ -2,7 +2,7 @@ import pandas as pd
 import json
 import selfies as sf
 from rdkit import Chem
-from rdkit.Chem import Crippen, Descriptors
+from rdkit.Chem import Descriptors
 from chembl_webresource_client.new_client import new_client
 import numpy as np
 import tqdm
@@ -46,13 +46,12 @@ def calculate_properties(smiles_str):
     try:
         mol = Chem.MolFromSmiles(smiles_str)
         if mol is None:
-            return None, None
+            return None
         
-        logp = Crippen.MolLogP(mol)
         tpsa = Descriptors.TPSA(mol)
-        return logp, tpsa
+        return tpsa
     except:
-        return None, None
+        return None
 
 def save_intermediate():
     """Save current data to JSON"""
@@ -101,8 +100,11 @@ for i, record in enumerate(tqdm.tqdm(results, desc="Processing molecules")):
         if smiles in existing_smiles:
             continue
         
-        # Calculate properties
-        logp, tpsa = calculate_properties(smiles)
+        # Calculate properties (TPSA only)
+        tpsa = calculate_properties(smiles)
+        if tpsa is None:
+            skipped += 1
+            continue
         
         # Convert to SELFIES
         selfies = smiles_to_selfies(smiles)
@@ -114,8 +116,7 @@ for i, record in enumerate(tqdm.tqdm(results, desc="Processing molecules")):
         molecule_entry = {
             'smiles': smiles,
             'selfies': selfies,
-            'logp': logp if logp is not None else 0.0,
-            'tpsa': tpsa if tpsa is not None else 0.0
+            'tpsa': tpsa
         }
         output_data.append(molecule_entry)
         existing_smiles.add(smiles)  # Track as seen
