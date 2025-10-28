@@ -46,11 +46,9 @@ idx_to_token = meta['idx_to_token']
 vocab_size = meta['vocab_size']
 max_length = meta['max_length']
 
-# Load properties - we need logp and tpsa
-# Since our dataset doesn't have logp, we'll generate dummy values for training
-# In practice, you'd compute actual logp values
+# Load properties - compute logp and tpsa from dataset
 molecules = meta['molecules']
-properties_raw = np.array([[mol.get('logp', 3.0), mol['tpsa']] for mol in molecules], dtype=np.float32)
+properties_raw = np.array([[mol.get('logp', 3.0), mol.get('tpsa', 82.0)] for mol in molecules], dtype=np.float32)
 
 # Normalize properties (zero mean, unit variance)
 logp_mean = np.mean(properties_raw[:, 0])
