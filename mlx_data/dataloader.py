@@ -68,6 +68,3 @@ def create_batches(tokenized_mx, properties_mx, batch_size, shuffle=True):
         batches.append((batch_tokens, batch_properties))
     
     return batches
-
-# Create batches
-batches = create_batches(tokenized_mx, BATCH_SIZE, shuffle=True)

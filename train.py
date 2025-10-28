@@ -1,7 +1,7 @@
 from models.transformer_vae import SelfiesTransformerVAE
 from utils.loss import compute_loss
 from utils.sample import sample_from_vae
-from mlx_data.dataloader import create_batches, split_train_val
+from mlx_data.dataloader import create_batches
 
 import mlx.core as mx
 import mlx.nn as nn
@@ -23,7 +23,7 @@ parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to 
 parser.add_argument('--save_every', type=int, default=5, help='Save model every N epochs')
 parser.add_argument('--output_dir', type=str, default='checkpoints', help='Directory to save checkpoints')
 parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs to warm up beta from 0 to 1')
-parser.add_argument('--max_beta', type=float, default=0.1, help='Maximum beta value')
+parser.add_argument('--max_beta', type=float, default=1.0, help='Maximum beta value (CVAE best practice: 1.0 for full KL divergence)')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
 parser.add_argument('--property_weight', type=float, default=10.0, help='Weight for property prediction loss (CVAE requires high weight)')
@@ -70,8 +70,6 @@ tokenized_mx = mx.array(tokenized)
 properties_mx = mx.array(properties)
 
 # Use create_batches from dataloader, but pair with properties
-from mlx_data.dataloader import create_batches
-
 # Shuffle data and properties together
 if True:  # Always shuffle
     n_samples = tokenized_mx.shape[0]
@@ -79,15 +77,15 @@ if True:  # Always shuffle
     tokenized_mx = tokenized_mx[indices]
     properties_mx = properties_mx[indices]
 
-# Create batches using existing function
-batches_data = create_batches(tokenized_mx, args.batch_size, shuffle=False)  # Already shuffled above
+# Create batches using existing function (handles properties automatically)
+batches = create_batches(tokenized_mx, properties_mx, args.batch_size, shuffle=False)  # Already shuffled above
 
-# Pair batches with properties
-batches = []
-for batch_data in batches_data:
-    # Get corresponding properties
-    batch_properties = properties_mx[len(batches) * args.batch_size:(len(batches) + 1) * args.batch_size]
-    batches.append((batch_data, batch_properties))
+# Split into train and validation sets
+train_size = int(0.9 * len(batches))
+train_batches = batches[:train_size]
+val_batches = batches[train_size:]
+
+print(f"Total batches: {len(batches)}, Train: {len(train_batches)}, Validation: {len(val_batches)}")
 
 # Initialize model and optimizer
 print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
@@ -161,26 +159,49 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         result = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
         logits, mu, logvar, predicted_properties, property_kl_mu, property_kl_logvar = result
         
-        # Get reconstruction, KL, and diversity losses
-        _, recon_loss, kl_loss, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
+        # Get reconstruction and diversity losses (skip KL from compute_loss)
+        _, recon_loss, _, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
         
-        # Property prediction loss (CVAE requirement)
+        # CVAE KL divergence: KL(q(z|x,c) || p(z|c))
+        # This trains property networks to match encoder's distribution
+        if property_kl_mu is not None and property_kl_logvar is not None:
+            # KL divergence between encoder posterior and property-conditioned prior
+            # KL(q(z|x,c) || p(z|c)) = KL(N(mu, sigma) || N(property_mu, property_sigma))
+            # Clip logvar for numerical stability
+            logvar_clipped = mx.clip(logvar, -5, 5)
+            property_logvar_clipped = mx.clip(property_kl_logvar, -5, 5)
+            
+            # Compute KL with numerical stability (log-space)
+            # KL(q||p) = 0.5 * (log(|Σ_p|/|Σ_q|) + tr(Σ_q * Σ_p^-1) + (μ_q-μ_p)^T * Σ_p^-1 * (μ_q-μ_p) - d)
+            log_var_ratio = property_logvar_clipped - logvar_clipped
+            mu_diff_sq = (mu - property_kl_mu) ** 2
+            
+            kl_loss = 0.5 * mx.sum(
+                log_var_ratio
+                + mx.exp(logvar_clipped - property_logvar_clipped)  # exp(logvar - property_logvar)
+                + mu_diff_sq * mx.exp(-property_logvar_clipped)  # (mu_diff^2) * exp(-property_logvar)
+                - 1.0,
+                axis=1  # Sum over latent dimensions
+            )
+            
+            kl_loss = mx.clip(kl_loss, 0, 1000)  # Clip to prevent explosion
+            kl_loss = mx.mean(kl_loss)  # Average over batch
+        else:
+            # Standard VAE: KL(q(z|x) || N(0,1))
+            logvar_clipped = mx.clip(logvar, -10, 10)
+            kl_loss = -0.5 * mx.mean(1 + logvar_clipped - mu**2 - mx.exp(logvar_clipped))
+        
+        # Property prediction loss (ensures z encodes properties)
         # Normalize targets
-        norm_logp = (batch_properties[:, 0] - model.logp_mean) / model.logp_std
-        norm_tpsa = (batch_properties[:, 1] - model.tpsa_mean) / model.tpsa_std
-        normalized_targets = mx.array([[norm_logp[i], norm_tpsa[i]] for i in range(batch_properties.shape[0])])
+        normalized_targets = mx.array([
+            [(batch_properties[i, 0] - model.logp_mean) / model.logp_std, 
+             (batch_properties[i, 1] - model.tpsa_mean) / model.tpsa_std]
+            for i in range(batch_properties.shape[0])
+        ])
         
         # MSE loss between predicted and target properties
         property_loss = mx.mean((predicted_properties - normalized_targets) ** 2)
-        
-        # Property-conditioned KL divergence (CVAE best practice)
-        # KL(q(z|properties) || N(0,1)) to regularize property-conditioned latent
-        if property_kl_mu is not None and property_kl_logvar is not None:
-            # Standard KL divergence formula
-            property_kl = -0.5 * mx.sum(1 + property_kl_logvar - property_kl_mu**2 - mx.exp(property_kl_logvar), axis=1)
-            property_kl = mx.mean(property_kl)
-        else:
-            property_kl = mx.array(0.0)
+        property_kl = mx.array(0.0)  # Not used anymore
         
         # Store losses for later (evaluate immediately)
         stored_losses['recon'] = float(recon_loss.item())
@@ -189,8 +210,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         stored_losses['property'] = float(property_loss.item())
         stored_losses['property_kl'] = float(property_kl.item())
         
-        # Weighted total loss with property KL
-        total_loss = recon_loss + kl_loss + diversity_weight * diversity_loss + property_weight * property_loss + 0.01 * property_kl
+        # Weighted total loss
+        total_loss = recon_loss + beta * kl_loss + diversity_weight * diversity_loss + property_weight * property_loss
         
         return total_loss
     
@@ -234,7 +255,7 @@ def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
         batch, properties = batch_data
         
         # Forward pass without gradients
-        logits, mu, logvar = model(batch, properties=properties, training=False, noise_std=noise_std)
+        logits, mu, logvar, _, _, _ = model(batch, properties=properties, training=False, noise_std=noise_std)
         loss = compute_loss(batch, logits, mu, logvar, beta, diversity_weight)
         
         total_loss, recon_loss, kl_loss, diversity_loss = loss

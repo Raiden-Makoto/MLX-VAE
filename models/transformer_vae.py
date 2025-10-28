@@ -36,14 +36,6 @@ class SelfiesTransformerVAE(nn.Module):
             nn.Linear(hidden_dim, embedding_dim)  # Output to embedding_dim for FILM
         )
         
-        # Property-conditioned latent (best practice for CVAE)
-        # Learn p(z|properties) instead of just p(z)
-        self.property_to_latent = nn.Sequential(
-            nn.Linear(self.num_properties, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, latent_dim)  # Map properties to latent space
-        )
-        
         # Property-conditioned latent distribution parameters
         # Generate mu and sigma from properties for better conditioning
         self.property_mu = nn.Sequential(
@@ -56,6 +48,10 @@ class SelfiesTransformerVAE(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, latent_dim)
         )
+        
+        # Initialize property_logvar to produce reasonable variance (~0.01 to 1)
+        # This prevents KL explosion during early training
+        # Note: MLX doesn't support direct bias manipulation, will use Xavier init
         
         # Property prediction head (CVAE requirement)
         # Predict properties from latent code z
@@ -84,54 +80,42 @@ class SelfiesTransformerVAE(nn.Module):
         eps = mx.random.normal(mu.shape)
         return mu + std * eps
 
-    def __call__(self, x, properties=None, training=True, noise_std=0.05):
+    def __call__(self, x, properties=None, training=True, noise_std=0.0):
         # x: [B, T] - input sequences
         input_seq = x[:, :-1]
         target_seq = x[:, 1:]  # Shift for next token prediction
         
-        # Get property embedding for conditioning (best practice for CVAE)
+        # Get property embedding for conditioning (FILM conditioning)
         if properties is not None:
             property_embedding = self.property_encoder(properties)  # [B, embedding_dim]
         else:
             property_embedding = None
         
-        # Encode to latent space WITH property conditioning (best practice for CVAE)
+        # Encoder learns q(z | x, c) - posterior distribution
         mu, logvar = self.encoder(input_seq, property_embedding)
-        z = self.reparameterize(mu, logvar)
+        z = self.reparameterize(mu, logvar)  # Use encoder's z
         
-        # Property-conditioned latent for training (best practice for CVAE)
-        # Learn to generate z from properties
+        # Property-conditioned prior p(z | c)
         if properties is not None:
-            property_mu = self.property_mu(properties)  # [B, latent_dim]
-            property_logvar = self.property_logvar(properties)  # [B, latent_dim]
-            
-            # Use property-conditioned z ONLY (forces property encoding)
-            # This makes property_mu learn to produce the right z for each property
-            z_property = self.reparameterize(property_mu, property_logvar)
-            z = z_property  # Use only property-conditioned z, not blended
+            property_mu = self.property_mu(properties)
+            property_logvar = self.property_logvar(properties)
         else:
-            z_property = None
+            property_mu = None
+            property_logvar = None
         
+        # Use encoder's z during training - property networks trained via KL divergence
         # Add Gaussian noise during training for decoder robustness
         if training and noise_std > 0:
             noise = mx.random.normal(z.shape) * noise_std
             z = z + noise
         
-        # Decode from latent space with FILM conditioning
+        # Decode with FILM conditioning
         logits = self.decoder(z, input_seq, property_embedding)
         
-        # Predict properties from latent code (for CVAE property loss)
-        predicted_properties = self.property_predictor(z)  # [B, 2]
+        # Property prediction head
+        predicted_properties = self.property_predictor(z)
         
-        # Return both encoder and property-conditioned latents for KL divergence
-        if properties is not None:
-            property_kl_mu = property_mu
-            property_kl_logvar = property_logvar
-        else:
-            property_kl_mu = None
-            property_kl_logvar = None
-        
-        return logits, mu, logvar, predicted_properties, property_kl_mu, property_kl_logvar
+        return logits, mu, logvar, predicted_properties, property_mu, property_logvar
 
     def generate_conditional(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
         """Generate molecules with target LogP and TPSA values"""
@@ -167,17 +151,23 @@ class SelfiesTransformerVAE(nn.Module):
         """Autoregressive decoding with property guidance"""
         batch_size = z.shape[0]
         START = 1
+        END = 2
         seq = mx.full((batch_size, 1), START, dtype=mx.int32)
-        samples = seq
         max_length = 50
         
-        for _ in range(max_length - 1):
+        for step in range(max_length - 1):
+            # Get logits for next token
             logits = self.decoder(z, seq, property_embedding)[:, -1, :]
+            
+            # Check for NaN/Inf for safety
+            if mx.any(mx.isnan(logits)) or mx.any(mx.isinf(logits)):
+                logits = mx.nan_to_num(logits, nan=-1e9, posinf=-1e9, neginf=-1e9)
             
             # Apply top-k sampling
             if top_k > 0:
-                top_k_logits = mx.topk(logits, top_k, axis=-1)
-                kth_largest = top_k_logits[:, top_k-1:top_k]
+                top_k = min(top_k, logits.shape[-1])  # Cap at vocab size
+                top_k_vals = mx.sort(logits, axis=-1)[:, -top_k:]  # Get top-k values
+                kth_largest = top_k_vals[:, :1]  # kth largest value
                 logits = mx.where(
                     logits < kth_largest,
                     -1e9,
@@ -188,13 +178,16 @@ class SelfiesTransformerVAE(nn.Module):
             if temperature != 1.0:
                 logits = logits / temperature
                 
+            # Sample next token
             probs = mx.softmax(logits, axis=-1)
             next_token = mx.random.categorical(probs)
             next_token = mx.expand_dims(next_token, axis=1)
-            samples = mx.concatenate([samples, next_token], axis=1)
+            
+            # Update seq so decoder sees previous tokens
+            seq = mx.concatenate([seq, next_token], axis=1)
             
             # Stop if all sequences hit END token
-            if mx.all(next_token == 2):
+            if mx.all(next_token == END):
                 break
                 
-        return samples
+        return seq

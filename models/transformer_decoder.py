@@ -1,10 +1,11 @@
 import mlx.core as mx
 import mlx.nn as nn
 
-from .layers import PositionalEncoding, TransformerDecoderLayer, FILM
+from .layers import PositionalEncoding, TransformerEncoderLayer, FILM
 
 class SelfiesTransformerDecoder(nn.Module):
-    """Transformer decoder for SELFIES generation"""
+    """Transformer decoder using self-attention (not cross-attention)"""
+    
     def __init__(
         self,
         vocab_size,
@@ -17,66 +18,60 @@ class SelfiesTransformerDecoder(nn.Module):
     ):
         super().__init__()
         self.embedding_dim = embedding_dim
-        self.hidden_dim = hidden_dim
-        self.latent_dim = latent_dim
         
         # Embedding layers
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         self.positional_encoding = PositionalEncoding(embedding_dim)
         
-        # Latent to hidden projection
+        # Project latent to embedding dimension
         self.latent_projection = nn.Linear(latent_dim, embedding_dim)
         
-        # FILM layers for property conditioning (best practice)
-        # Condition on properties by modulating feature statistics
-        self.film_layers = [
-            FILM(embedding_dim, embedding_dim)  # condition_dim = embedding_dim
-            for _ in range(num_layers)
-        ]
-        
-        # Transformer decoder layers
+        # Self-attention layers (not cross-attention!)
         self.decoder_layers = [
-            TransformerDecoderLayer(embedding_dim, num_heads, hidden_dim, dropout)
+            TransformerEncoderLayer(embedding_dim, num_heads, hidden_dim, dropout)
             for _ in range(num_layers)
         ]
         
-        # Output projection to vocabulary
+        # FILM layers for property conditioning
+        self.film_layers = [
+            FILM(embedding_dim, embedding_dim)
+            for _ in range(num_layers)
+        ]
+        
         self.output_projection = nn.Linear(embedding_dim, vocab_size)
-        
         self.dropout = nn.Dropout(dropout)
-        
+    
     def __call__(self, z, input_seq, property_embedding=None):
-        # z: [B, latent_dim] - latent codes
-        # input_seq: [B, T] - input sequences (for teacher forcing)
-        # property_embedding: [B, embedding_dim] - optional property conditioning
         batch_size, seq_len = input_seq.shape
         
-        # Project latent code to embedding dimension
-        latent_embedding = self.latent_projection(z)  # [B, embedding_dim]
-        latent_embedding = mx.expand_dims(latent_embedding, axis=1)  # [B, 1, embedding_dim]
+        # Create mask (1 for valid, 0 for padding)
+        mask = (input_seq != 0).astype(mx.float32)
         
-        # Token embedding + positional encoding
+        # Embed tokens + add position encoding
         embedded = self.token_embedding(input_seq)  # [B, T, embedding_dim]
         embedded = self.positional_encoding(embedded)
         
-        # Add latent information to embeddings
-        embedded = embedded + mx.tile(latent_embedding, (1, seq_len, 1))
+        # Add latent as global context (broadcast to all positions)
+        latent_embedding = self.latent_projection(z)  # [B, embedding_dim]
+        latent_expanded = mx.expand_dims(latent_embedding, axis=1)  # [B, 1, embedding_dim]
+        embedded = embedded + latent_expanded  # [B, T, embedding_dim]
+        
+        # Add property conditioning if provided
+        if property_embedding is not None:
+            property_expanded = mx.expand_dims(property_embedding, axis=1)
+            embedded = embedded + property_expanded
+        
         embedded = self.dropout(embedded)
         
-        # Use latent embedding as "encoder output" for cross-attention
-        encoder_output = mx.tile(latent_embedding, (1, seq_len, 1))  # [B, T, embedding_dim]
-        
-        # Pass through transformer decoder layers with FILM conditioning
+        # Self-attention layers with FILM conditioning
         decoder_output = embedded
         for i, layer in enumerate(self.decoder_layers):
-            decoder_output = layer(decoder_output, encoder_output)
+            # Self-attention with mask
+            decoder_output = layer(decoder_output, mask)
             
-            # Apply FILM conditioning if properties provided
+            # Apply FILM conditioning
             if property_embedding is not None:
-                # Condition the decoder output with FILM (Feature-wise Linear Modulation)
-                decoder_output = self.film_layers[i](decoder_output, property_embedding)  # [B, T, embedding_dim]
+                decoder_output = self.film_layers[i](decoder_output, property_embedding)
         
-        # Project to vocabulary
-        logits = self.output_projection(decoder_output)
-        
+        logits = self.output_projection(decoder_output)  # [B, T, vocab_size]
         return logits

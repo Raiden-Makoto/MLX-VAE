@@ -15,7 +15,8 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 
 ### Core Architecture
 - **SELFIES Representation**: Uses SELFIES (Self-Referencing Embedded Strings) for 100% chemically valid molecular generation
-- **Transformer Architecture**: State-of-the-art multi-head attention mechanism with positional encoding
+- **Transformer Architecture**: State-of-the-art multi-head self-attention mechanism with positional encoding
+- **Self-Attention Decoder**: Uses self-attention (not cross-attention) for proper sequence learning
 - **Parallel Processing**: Processes all sequence positions simultaneously for faster training
 - **Causal Masking**: Ensures autoregressive generation with proper attention patterns
 - **MLX Framework**: Optimized for Apple Silicon with efficient memory usage
@@ -58,11 +59,9 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 ## 🏗️ Architecture
 
 ```
-Input SELFIES → Transformer Encoder → Latent (μ, σ) → Reparameterization → [Latent + Property Encoder] → Fusion Layer → Decoder → Generated SELFIES
-                    ↑                                                      ↑
-             Properties (LogP, TPSA)  →   Property Encoder (2-layer MLP) ─┘
-                                                      ↓
-                                              Comprehensive Filtering
+Input SELFIES → Transformer Encoder → Latent (μ, σ) → Reparameterization → Decoder (Self-Attention) → Generated SELFIES
+                    ↑                                                                  ↑
+             Properties (LogP, TPSA)  →   Property Encoder → FILM Layers (γ, β) ─────────┘
                     ↓
        Stable, Synthesizable, Property-Controlled Molecules
 ```
@@ -82,11 +81,11 @@ Where:
 ### Components
 
 - **Transformer Encoder**: Multi-head self-attention → sequence pooling → $\mu, \log\sigma$
-- **Property Encoder**: 2-layer MLP: `Linear(properties) → ReLU → Linear` → property latent
-- **Latent Fusion**: Concatenate [encoder latent, property latent] → `Linear(2×latent_dim → latent_dim)`
-- **Reparameterization**: $z = \mu + \sigma \odot \epsilon, \epsilon \sim \mathcal{N}(0, I)$ → then fuse with properties
-- **Transformer Decoder**: Cross-attention to fused latent → autoregressive generation
-- **Conditional Generation**: Sample $z \sim \mathcal{N}(0, I)$, encode properties, fuse, decode
+- **Property Encoder**: 2-layer MLP: `Linear(properties) → ReLU → Linear` → property embedding
+- **Property-Conditioned Latent**: $\mu_p(c), \sigma_p(c)$ learned from properties alone
+- **Reparameterization**: $z = \mu + \sigma \odot \epsilon, \epsilon \sim \mathcal{N}(0, I)$
+- **Transformer Decoder**: Self-attention with FILM conditioning (γ, β modulation)
+- **Conditional Generation**: Sample $z \sim p(z|c)$, apply FILM conditioning, decode
 
 ## 🔬 Molecular Analysis Pipeline
 
@@ -155,14 +154,15 @@ python utils/visualize.py  # Uses output/validation_results.csv
 QVAE/
 ├── models/                 # Transformer VAE architecture components
 │   ├── transformer_encoder.py    # Transformer encoder with masked pooling
-│   ├── transformer_decoder.py   # Transformer decoder with cross-attention
+│   ├── transformer_decoder.py   # Transformer decoder with self-attention
 │   ├── transformer_vae.py       # Main CVAE model with property conditioning
 │   └── layers/                   # Layer implementations
 │       ├── multi_head_attention.py
 │       ├── feed_forward.py
 │       ├── positional_encoding.py
 │       ├── transformer_encoder_layer.py
-│       └── transformer_decoder_layer.py
+│       ├── transformer_decoder_layer.py
+│       └── film.py
 ├── utils/                 # Utility functions
 │   ├── loss.py           # Loss functions with free bits
 │   ├── sample.py         # Sampling and conditional generation
@@ -186,13 +186,14 @@ QVAE/
 ## 🎯 Key Innovations
 
 1. **Conditional VAE Architecture**: Property-controlled generation with LogP and TPSA targets
-2. **Transformer-Based**: Multi-head self-attention and cross-attention for sequence modeling
-3. **Property Conditioning**: Deep property encoder (2-layer MLP) with latent fusion layer
-4. **Normalized Properties**: Automatic property normalization (handles 25x scale differences)
-5. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
-6. **Conformational Analysis**: Strain energy filtering for realistic molecules
-7. **Advanced Regularization**: KL annealing, diversity loss, and noise injection
-8. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
+2. **Self-Attention Decoder**: Uses self-attention (not cross-attention) for proper sequence learning
+3. **Transformer-Based**: Multi-head self-attention for sequence modeling
+4. **Property Conditioning**: Deep property encoder with FILM layers for sophisticated conditioning
+5. **Normalized Properties**: Automatic property normalization (handles 25x scale differences)
+6. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
+7. **Conformational Analysis**: Strain energy filtering for realistic molecules
+8. **Advanced Regularization**: KL annealing, diversity loss, and property prediction loss
+9. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
 
 ## 🧪 Conditional Generation
 
