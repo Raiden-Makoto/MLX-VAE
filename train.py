@@ -137,7 +137,8 @@ if args.resume:
             with open(norm_file, 'r') as f:
                 norm_stats = json.load(f)
             model.set_property_normalization(
-                0.0, 1.0,  # LogP params ignored
+                norm_stats.get('logp_mean', 0.0),
+                norm_stats.get('logp_std', 1.0),
                 norm_stats['tpsa_mean'],
                 norm_stats['tpsa_std']
             )
@@ -391,6 +392,8 @@ for epoch in range(start_epoch, total_epochs):
         # Also save normalization stats and architecture params
         import json
         norm_stats = {
+            'logp_mean': float(logp_mean),
+            'logp_std': float(logp_std),
             'tpsa_mean': float(tpsa_mean),
             'tpsa_std': float(tpsa_std),
             # Save architecture parameters to ensure consistent loading
