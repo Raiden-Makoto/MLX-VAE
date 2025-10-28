@@ -216,14 +216,15 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         property_kl = mx.array(0.0)  # Not used anymore
         
         # Compute per-property MAE for diagnostics
-        # Denormalize properties for MAE calculation (both pred and true are in normalized space)
-        pred_logp = predicted_properties[:, 0] * model.logp_std + model.logp_mean
-        true_logp = batch_properties[:, 0] * model.logp_std + model.logp_mean
-        logp_mae = mx.mean(mx.abs(pred_logp - true_logp))
+        # Denormalize predicted_properties to raw scale, then compare with denormalized batch_properties
+        # batch_properties are normalized, so denormalize them back to raw for MAE
+        pred_logp_raw = predicted_properties[:, 0]  # Already in raw scale
+        true_logp_raw = batch_properties[:, 0] * model.logp_std + model.logp_mean  # Denormalize batch_properties
+        logp_mae = mx.mean(mx.abs(pred_logp_raw - true_logp_raw))
         
-        pred_tpsa = predicted_properties[:, 1] * model.tpsa_std + model.tpsa_mean
-        true_tpsa = batch_properties[:, 1] * model.tpsa_std + model.tpsa_mean
-        tpsa_mae = mx.mean(mx.abs(pred_tpsa - true_tpsa))
+        pred_tpsa_raw = predicted_properties[:, 1]  # Already in raw scale
+        true_tpsa_raw = batch_properties[:, 1] * model.tpsa_std + model.tpsa_mean  # Denormalize batch_properties
+        tpsa_mae = mx.mean(mx.abs(pred_tpsa_raw - true_tpsa_raw))
         
         # Store losses for later (evaluate immediately)
         stored_losses['recon'] = float(recon_loss.item())
