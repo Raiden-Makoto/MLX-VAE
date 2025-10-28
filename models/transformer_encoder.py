@@ -10,7 +10,7 @@ class SelfiesTransformerEncoder(nn.Module):
         vocab_size,
         embedding_dim: int=128,
         hidden_dim: int=256,
-        latent_dim: int=64,
+        latent_dim: int=256,
         num_heads: int=4,
         num_layers: int=4,
         dropout: float=0.1,
