@@ -30,9 +30,12 @@ class MultiHeadAttention(nn.Module):
         scores = mx.matmul(Q, K.transpose(0, 1, 3, 2)) / mx.sqrt(mx.array(self.d_k, dtype=mx.float32))
         
         if mask is not None:
-            # Expand mask to match attention scores shape
-            if len(mask.shape) == 2:  # [B, T]
+            # Handle different mask shapes
+            if len(mask.shape) == 2:  # [B, T] - padding mask
                 mask = mx.expand_dims(mx.expand_dims(mask, axis=1), axis=1)  # [B, 1, 1, T]
+            elif len(mask.shape) == 3:  # [B, T, T] - causal mask or combined mask
+                mask = mx.expand_dims(mask, axis=1)  # [B, 1, T, T]
+            # mask shape is now [B, 1, T, T] or [B, 1, 1, T]
             scores = mx.where(mask == 0, -1e9, scores)
         
         attn_weights = mx.softmax(scores, axis=-1)

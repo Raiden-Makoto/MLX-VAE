@@ -1,156 +1,133 @@
 <img src="https://r2cdn.perplexity.ai/pplx-full-logo-primary-dark%402x.png" style="height:64px;margin-right:32px"/>
 
-## 🎯 FOUND THE ROOT CAUSE: Decoder Architecture Is Fundamentally Broken
+# well we increased from 0 to 1.1%
 
-Your 0% accuracy is because **the decoder's cross-attention is useless**.
+Great progress! **0% → 1.1% is massive.** But it's still too low. Here's the diagnostic path:
 
-Look at this line in your decoder:
+***
+
+## Immediate Checks (Before More Retraining)
+
+### 1. **Verify Training is Converging**
+
+Print loss at each epoch:
 
 ```python
-encoder_output = mx.tile(latent_embedding, (1, seq_len, 1))
+print(f"Epoch {epoch}: Recon={recon_loss:.3f}, KL={kl_loss:.3f}, Property={prop_loss:.3f}")
 ```
 
-This creates:
+**Expected:** Recon loss should drop from ~5.0 → ~1.5 over 30 epochs
 
-```
-encoder_output = [latent_vec, latent_vec, latent_vec, ..., latent_vec]
-                  (same latent repeated 50 times!)
-```
+If it's not decreasing, training is broken → fix before continuing.
 
-**The problem:** Cross-attention always attends to the SAME information at every position. There's no positional structure!
+### 2. **Test Greedy Decoding (5 minutes)**
 
-***
-
-## Why This Breaks Inference
-
-### Training (with teacher forcing):
-
-- Decoder sees full sequence: `[START, token2, token3, ..., tokenN]`
-- Cross-attention repeats same latent (inefficient but works)
-- Reconstruction loss drives learning
-- ✓ Mostly works
-
-
-### Inference (autoregressive):
-
-- Iteration 1: `seq=[START]` → predict token2 from repeated latent (random)
-- Iteration 2: `seq=[START, token2]` → predict token3 from repeated latent (random)
-- Iteration 3: `seq=[START, token2, token3]` → predict token4 from repeated latent (random)
-- **Result: 0% accuracy (all random)**
-
-The decoder has no way to know which tokens are new vs old!
-
-***
-
-## The Fix: Replace the Decoder
-
-Your current decoder uses flawed cross-attention. Replace it with one that uses **self-attention only**:
+Replace sampling with argmax:
 
 ```python
-import mlx.core as mx
-import mlx.nn as nn
-from .layers import PositionalEncoding, TransformerEncoderLayer, FILM
+# Current (sampling)
+next_token = mx.random.categorical(probs)
 
-class SelfiesTransformerDecoder(nn.Module):
-    """Transformer decoder using self-attention (not cross-attention)"""
-    
-    def __init__(self, vocab_size, embedding_dim: int=128, hidden_dim: int=256,
-                 latent_dim: int=64, num_heads: int=4, num_layers: int=4, dropout: float=0.1):
-        super().__init__()
-        
-        self.embedding_dim = embedding_dim
-        self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
-        self.positional_encoding = PositionalEncoding(embedding_dim)
-        
-        # Project latent to embedding dimension
-        self.latent_projection = nn.Linear(latent_dim, embedding_dim)
-        
-        # Self-attention layers (not cross-attention!)
-        self.decoder_layers = [
-            TransformerEncoderLayer(embedding_dim, num_heads, hidden_dim, dropout)
-            for _ in range(num_layers)
-        ]
-        
-        # FILM layers for property conditioning
-        self.film_layers = [
-            FILM(embedding_dim, embedding_dim)
-            for _ in range(num_layers)
-        ]
-        
-        self.output_projection = nn.Linear(embedding_dim, vocab_size)
-        self.dropout = nn.Dropout(dropout)
-    
-    def __call__(self, z, input_seq, property_embedding=None):
-        batch_size, seq_len = input_seq.shape
-        
-        # Create mask (1 for valid, 0 for padding)
-        mask = (input_seq != 0).astype(mx.float32)
-        
-        # Embed tokens + add position encoding
-        embedded = self.token_embedding(input_seq)  # [B, T, embedding_dim]
-        embedded = self.positional_encoding(embedded)
-        
-        # ✅ Add latent as global context (broadcast to all positions)
-        latent_embedding = self.latent_projection(z)  # [B, embedding_dim]
-        latent_expanded = mx.expand_dims(latent_embedding, axis=1)  # [B, 1, embedding_dim]
-        embedded = embedded + latent_expanded  # [B, T, embedding_dim]
-        
-        # Add property conditioning if provided
-        if property_embedding is not None:
-            property_expanded = mx.expand_dims(property_embedding, axis=1)
-            embedded = embedded + property_expanded
-        
-        embedded = self.dropout(embedded)
-        
-        # Self-attention layers with FILM conditioning
-        decoder_output = embedded
-        for i, layer in enumerate(self.decoder_layers):
-            # Self-attention with mask
-            decoder_output = layer(decoder_output, mask)
-            
-            # Apply FILM conditioning
-            if property_embedding is not None:
-                decoder_output = self.film_layers[i](decoder_output, property_embedding)
-        
-        logits = self.output_projection(decoder_output)  # [B, T, vocab_size]
-        return logits
+# Test (greedy)
+next_token = mx.argmax(logits, axis=-1)
+```
+
+**If greedy >> 1.1% (e.g., 30%+), the model learned something but has low confidence.**
+
+Use greedy for now.
+
+### 3. **Check for Causal Masking**
+
+**CRITICAL:** Your self-attention needs **causal masking** for autoregressive generation!
+
+During training: model sees full `[START, t2, t3, ..., tN]`
+During inference: model generates one token at a time
+
+Without causal masking:
+
+- Training: position 1 attends to position 50 (cheating!)
+- Inference: position 1 can't attend to position 50 (fails!)
+
+Check your `TransformerEncoderLayer` - does it support causal masking?
+
+```python
+# Should look like:
+seq_len = x.shape[1]
+causal_mask = mx.tril(mx.ones((seq_len, seq_len)))
+# Use causal_mask in attention to prevent looking at future positions
+```
+
+**If it doesn't have causal masking, add it** (this will help a lot).
+
+***
+
+## Incremental Improvements
+
+### Quick Wins (No Retraining)
+
+**3a. Temperature Scaling**
+
+```python
+# Sharpen the distribution
+logits = logits / 0.5  # temperature < 1 = sharper predictions
+probs = mx.softmax(logits, axis=-1)
+```
+
+
+### Medium Effort (Retraining Required)
+
+**3b. Increase Latent Dimension**
+
+```python
+latent_dim=256  # was 64
+# Retrain for 30 epochs → should see significant improvement
+```
+
+**3c. Add Causal Masking** (if missing)
+
+```python
+# Ensure self-attention uses causal mask
+# Retrain for 30 epochs → should help autoregressive generation
+```
+
+
+### Longer Effort
+
+**3d. Increase Model Capacity**
+
+```python
+model = SelfiesTransformerVAE(
+    embedding_dim=256,   # was 128
+    hidden_dim=512,      # was 256
+    num_layers=6,        # was 4
+    latent_dim=256,      # was 64
+)
+# Retrain for 50+ epochs
 ```
 
 
 ***
 
-## Key Changes
+## Expected Trajectory
 
-1. **Removed cross-attention layer**: No more repeated latent vectors
-2. **Use self-attention only**: Learns interdependencies between tokens
-3. **Add latent as context**: Broadcast to all positions once
-4. **Keep FILM conditioning**: Still modulate with properties
-5. **Add proper masking**: Prevents attending to padding
+```
+Current:     1.1% (architecture fixed)
++ Greedy:    5-10% (if model learned something)
++ Causal masking: 10-20% (if not already there)
++ Larger latent: 15-30%
++ Larger model: 30-50%
++ 50+ epochs: 40-60%+
+```
 
-***
-
-## Why This Works
-
-- ✅ Self-attention learns proper sequence structure
-- ✅ Latent provides global context
-- ✅ FILM modulates based on properties
-- ✅ Autoregressive inference works (self-attention on growing seq)
-- ✅ No confusing cross-attention to repeated latents
 
 ***
 
-## Next Steps
+## Action Plan
 
-1. **Replace `transformer_decoder.py`** with the code above
-2. **Retrain from scratch** (architecture changed, old weights won't work)
-3. **Test inference** - should be WAY better
-
-This is a fundamental architectural fix. It explains why nothing else worked.
-<span style="display:none">[^1][^2]</span>
-
-<div align="center">⁂</div>
-
-[^1]: transformer_decoder.py
-
-[^2]: transformer_encoder.py
-
+1. ✅ Print loss curves - verify training works
+2. ✅ Try greedy decoding - see if it's a confidence issue
+3. ✅ Check for causal masking - critical for inference
+4. If causal masking missing → add it, retrain
+5. Increase latent_dim to 256, retrain
+6. If still <20%, increase model size
+7. Train for 50-100 epochs with learning rate schedule

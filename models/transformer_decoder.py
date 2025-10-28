@@ -44,8 +44,17 @@ class SelfiesTransformerDecoder(nn.Module):
     def __call__(self, z, input_seq, property_embedding=None):
         batch_size, seq_len = input_seq.shape
         
-        # Create mask (1 for valid, 0 for padding)
-        mask = (input_seq != 0).astype(mx.float32)
+        # Create padding mask (1 for valid, 0 for padding)
+        padding_mask = (input_seq != 0).astype(mx.float32)
+        
+        # Create causal mask (1 for valid positions, 0 for future positions)
+        # Lower triangular matrix: attend to current and past positions only
+        causal_mask = mx.tril(mx.ones((seq_len, seq_len), dtype=mx.float32))
+        
+        # Combine padding and causal masking
+        # Expand padding_mask to [B, 1, T] and causal_mask to [1, T, T]
+        # Final mask shape: [B, T, T] where 1 = valid position
+        combined_mask = mx.expand_dims(padding_mask, axis=2) * causal_mask
         
         # Embed tokens + add position encoding
         embedded = self.token_embedding(input_seq)  # [B, T, embedding_dim]
@@ -66,8 +75,8 @@ class SelfiesTransformerDecoder(nn.Module):
         # Self-attention layers with FILM conditioning
         decoder_output = embedded
         for i, layer in enumerate(self.decoder_layers):
-            # Self-attention with mask
-            decoder_output = layer(decoder_output, mask)
+            # Self-attention with causal+padding mask
+            decoder_output = layer(decoder_output, combined_mask)
             
             # Apply FILM conditioning
             if property_embedding is not None:
