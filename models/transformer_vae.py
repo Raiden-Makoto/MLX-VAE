@@ -217,9 +217,9 @@ class SelfiesTransformerVAE(nn.Module):
             if temperature != 1.0:
                 logits = logits / temperature
                 
-            # Greedy decoding (argmax) for better accuracy
-            # Use argmax instead of sampling to get highest-confidence predictions
-            next_token = mx.argmax(logits, axis=-1, keepdims=True)
+            # Sample from logits distribution instead of greedy
+            probs = mx.softmax(logits, axis=-1)
+            next_token = mx.random.categorical(probs)
             next_token = next_token.astype(mx.int32)
             
             # Update seq so decoder sees previous tokens
