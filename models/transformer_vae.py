@@ -40,6 +40,18 @@ class SelfiesTransformerVAE(nn.Module):
             nn.Linear(hidden_dim, latent_dim)
         )
         
+        # FILM embeddings for decoder (keep separate as per research doc)
+        self.property_encoder_logp = nn.Sequential(
+            nn.Linear(1, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, embedding_dim)  # For FILM
+        )
+        self.property_encoder_tpsa = nn.Sequential(
+            nn.Linear(1, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, embedding_dim)  # For FILM
+        )
+        
         # Property prediction heads
         self.tpsa_predictor = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
@@ -115,6 +127,13 @@ class SelfiesTransformerVAE(nn.Module):
             noise = mx.random.normal(z.shape) * noise_std
             z = z + noise
         
+        # Get FILM embeddings for decoder
+        film_embedding = None
+        if tpsa_properties is not None and logp_properties is not None:
+            logp_emb = self.property_encoder_logp(logp_properties)  # [B, embedding_dim]
+            tpsa_emb = self.property_encoder_tpsa(tpsa_properties)  # [B, embedding_dim]
+            film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)  # [B, 2*embedding_dim]
+        
         # Concatenate properties with z for decoder conditioning (CVAE best practice)
         if tpsa_properties is not None and logp_properties is not None:
             properties_combined = mx.concatenate([logp_properties, tpsa_properties], axis=-1)  # [B, 2]
@@ -122,7 +141,7 @@ class SelfiesTransformerVAE(nn.Module):
         else:
             z_conditioned = z
         
-        logits = self.decoder(z_conditioned, input_seq)
+        logits = self.decoder(z_conditioned, input_seq, film_embedding)
         
         # Predict both properties
         predicted_tpsa = self.tpsa_predictor(z)  # [B, 1]
@@ -156,12 +175,20 @@ class SelfiesTransformerVAE(nn.Module):
         noise = mx.random.normal((num_samples, self.latent_dim))
         z = joint_mu + std * noise
         
+        # Get FILM embeddings for decoder
+        logp_array = mx.array([[norm_logp]] * num_samples)  # [num_samples, 1]
+        tpsa_array = mx.array([[norm_tpsa]] * num_samples)  # [num_samples, 1]
+        
+        logp_emb = self.property_encoder_logp(logp_array)  # [num_samples, embedding_dim]
+        tpsa_emb = self.property_encoder_tpsa(tpsa_array)  # [num_samples, embedding_dim]
+        film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)  # [num_samples, 2*embedding_dim]
+        
         # Concatenate properties with z for conditioning (CVAE best practice)
         properties_combined = mx.array([[norm_logp, norm_tpsa]] * num_samples)  # [num_samples, 2]
         z_conditioned = mx.concatenate([z, properties_combined], axis=-1)  # [num_samples, latent_dim+2]
         
-        # Decode with conditioned z
-        samples = self._decode_conditional(z_conditioned, None, temperature, top_k)
+        # Decode with conditioned z and FILM embeddings
+        samples = self._decode_conditional(z_conditioned, film_embedding, temperature, top_k)
         return samples
 
     def _decode_conditional(self, z, property_embedding, temperature, top_k):
