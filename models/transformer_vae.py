@@ -40,19 +40,6 @@ class SelfiesTransformerVAE(nn.Module):
             nn.Linear(hidden_dim, latent_dim)
         )
         
-        # FILM embeddings (concatenated for decoder)
-        # Each outputs full embedding_dim, concatenate to 2*embedding_dim
-        self.property_encoder_logp = nn.Sequential(
-            nn.Linear(1, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, embedding_dim)
-        )
-        self.property_encoder_tpsa = nn.Sequential(
-            nn.Linear(1, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, embedding_dim)
-        )
-        
         # Property prediction heads
         self.tpsa_predictor = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
@@ -102,25 +89,7 @@ class SelfiesTransformerVAE(nn.Module):
                 # Single property (assume TPSA)
                 tpsa_properties = properties  # [B, 1]
         
-        # Get FILM embeddings for decoder
-        tpsa_embedding = None
-        logp_embedding = None
-        if tpsa_properties is not None:
-            tpsa_embedding = self.property_encoder_tpsa(tpsa_properties)  # [B, embedding_dim]
-        if logp_properties is not None:
-            logp_embedding = self.property_encoder_logp(logp_properties)  # [B, embedding_dim]
-        
-        # Combine FILM embeddings
-        decoder_embedding = None
-        if tpsa_embedding is not None and logp_embedding is not None:
-            # Concatenate both embeddings for FILM
-            decoder_embedding = mx.concatenate([logp_embedding, tpsa_embedding], axis=-1)  # [B, 2*embedding_dim]
-        elif tpsa_embedding is not None:
-            decoder_embedding = tpsa_embedding
-        elif logp_embedding is not None:
-            decoder_embedding = logp_embedding
-        
-        # Encoder (no longer uses property embeddings)
+        # Encoder
         mu, logvar = self.encoder(input_seq)
         z = self.reparameterize(mu, logvar)
         
@@ -146,15 +115,10 @@ class SelfiesTransformerVAE(nn.Module):
             noise = mx.random.normal(z.shape) * noise_std
             z = z + noise
         
-        # Decode with combined conditioning
-        # Concatenate properties with z for decoder
-        if decoder_embedding is not None:
-            # Use properties directly, not embeddings
-            if tpsa_properties is not None and logp_properties is not None:
-                properties_combined = mx.concatenate([logp_properties, tpsa_properties], axis=-1)  # [B, 2]
-                z_conditioned = mx.concatenate([z, properties_combined], axis=-1)  # [B, latent_dim+2]
-            else:
-                z_conditioned = z
+        # Concatenate properties with z for decoder conditioning (CVAE best practice)
+        if tpsa_properties is not None and logp_properties is not None:
+            properties_combined = mx.concatenate([logp_properties, tpsa_properties], axis=-1)  # [B, 2]
+            z_conditioned = mx.concatenate([z, properties_combined], axis=-1)  # [B, latent_dim+2]
         else:
             z_conditioned = z
         
@@ -192,14 +156,7 @@ class SelfiesTransformerVAE(nn.Module):
         noise = mx.random.normal((num_samples, self.latent_dim))
         z = joint_mu + std * noise
         
-        # Get FILM embeddings for decoder
-        logp_array = mx.array([[norm_logp]] * num_samples)  # [num_samples, 1]
-        tpsa_array = mx.array([[norm_tpsa]] * num_samples)  # [num_samples, 1]
-        
-        logp_embedding = self.property_encoder_logp(logp_array)  # [num_samples, embedding_dim]
-        tpsa_embedding = self.property_encoder_tpsa(tpsa_array)  # [num_samples, embedding_dim]
-        
-        # Concatenate properties with z for conditioning
+        # Concatenate properties with z for conditioning (CVAE best practice)
         properties_combined = mx.array([[norm_logp, norm_tpsa]] * num_samples)  # [num_samples, 2]
         z_conditioned = mx.concatenate([z, properties_combined], axis=-1)  # [num_samples, latent_dim+2]
         
