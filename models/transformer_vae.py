@@ -46,8 +46,19 @@ class SelfiesTransformerVAE(nn.Module):
             nn.Linear(hidden_dim, latent_dim)
         )
         
-        # LogP conditioning (separate, independent modulation)
-        # LogP only modulates decoder features via FILM, doesn't affect prior
+        # LogP conditioning - BOTH prior network AND decoder
+        # LogP-conditioned latent distribution parameters (for prior p(z|c))
+        self.logp_mu = nn.Sequential(
+            nn.Linear(1, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)
+        )
+        self.logp_logvar = nn.Sequential(
+            nn.Linear(1, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, latent_dim)
+        )
+        # LogP encoder for decoder conditioning
         self.logp_encoder = nn.Sequential(
             nn.Linear(1, hidden_dim),
             nn.ReLU(),
@@ -112,10 +123,23 @@ class SelfiesTransformerVAE(nn.Module):
         mu, logvar = self.encoder(input_seq, tpsa_embedding)
         z = self.reparameterize(mu, logvar)
         
-        # TPSA-conditioned prior p(z | tpsa)
-        if tpsa_properties is not None:
+        # Property-conditioned priors p(z | properties)
+        # For KL computation, need both property_mu and property_logvar
+        # If both properties provided, combine them; else use single property
+        if tpsa_properties is not None and logp_properties is not None:
+            # Dual property conditioning: average the prior networks
+            tpsa_mu = self.property_mu(tpsa_properties)
+            tpsa_logvar = self.property_logvar(tpsa_properties)
+            logp_mu = self.logp_mu(logp_properties)
+            logp_logvar = self.logp_logvar(logp_properties)
+            property_mu = (tpsa_mu + logp_mu) / 2
+            property_logvar = (tpsa_logvar + logp_logvar) / 2
+        elif tpsa_properties is not None:
             property_mu = self.property_mu(tpsa_properties)
             property_logvar = self.property_logvar(tpsa_properties)
+        elif logp_properties is not None:
+            property_mu = self.logp_mu(logp_properties)
+            property_logvar = self.logp_logvar(logp_properties)
         else:
             property_mu = None
             property_logvar = None
@@ -167,9 +191,16 @@ class SelfiesTransformerVAE(nn.Module):
         tpsa_array = mx.array([[norm_tpsa]] * num_samples)  # [num_samples, 1]
         tpsa_embedding = self.property_encoder(tpsa_array)  # [num_samples, embedding_dim]
         
-        # Sample z from TPSA-conditioned prior
-        property_mu = self.property_mu(tpsa_array)  # [num_samples, latent_dim]
-        property_logvar = self.property_logvar(tpsa_array)  # [num_samples, latent_dim]
+        # Sample z from DUAL property-conditioned prior
+        # Average the TPSA and LogP prior networks
+        tpsa_mu = self.property_mu(tpsa_array)  # [num_samples, latent_dim]
+        tpsa_logvar = self.property_logvar(tpsa_array)  # [num_samples, latent_dim]
+        logp_mu = self.logp_mu(logp_array)  # [num_samples, latent_dim]
+        logp_logvar = self.logp_logvar(logp_array)  # [num_samples, latent_dim]
+        
+        # Combine both priors
+        property_mu = (tpsa_mu + logp_mu) / 2
+        property_logvar = (tpsa_logvar + logp_logvar) / 2
         
         std = mx.exp(0.5 * property_logvar)
         noise = mx.random.normal((num_samples, self.latent_dim))
