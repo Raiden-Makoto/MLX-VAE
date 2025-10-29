@@ -120,9 +120,8 @@ class SelfiesTransformerVAE(nn.Module):
         elif logp_embedding is not None:
             decoder_embedding = logp_embedding
         
-        # Encoder gets combined conditioning (or single property)
-        combined_encoder_embedding = decoder_embedding if decoder_embedding is not None else tpsa_embedding
-        mu, logvar = self.encoder(input_seq, combined_encoder_embedding)
+        # Encoder (no longer uses property embeddings)
+        mu, logvar = self.encoder(input_seq)
         z = self.reparameterize(mu, logvar)
         
         # Joint property-conditioned prior p(z | [logp, tpsa])
@@ -148,7 +147,18 @@ class SelfiesTransformerVAE(nn.Module):
             z = z + noise
         
         # Decode with combined conditioning
-        logits = self.decoder(z, input_seq, decoder_embedding)
+        # Concatenate properties with z for decoder
+        if decoder_embedding is not None:
+            # Use properties directly, not embeddings
+            if tpsa_properties is not None and logp_properties is not None:
+                properties_combined = mx.concatenate([logp_properties, tpsa_properties], axis=-1)  # [B, 2]
+                z_conditioned = mx.concatenate([z, properties_combined], axis=-1)  # [B, latent_dim+2]
+            else:
+                z_conditioned = z
+        else:
+            z_conditioned = z
+        
+        logits = self.decoder(z_conditioned, input_seq)
         
         # Predict both properties
         predicted_tpsa = self.tpsa_predictor(z)  # [B, 1]
@@ -189,11 +199,12 @@ class SelfiesTransformerVAE(nn.Module):
         logp_embedding = self.property_encoder_logp(logp_array)  # [num_samples, embedding_dim]
         tpsa_embedding = self.property_encoder_tpsa(tpsa_array)  # [num_samples, embedding_dim]
         
-        # Concatenate both embeddings for FILM
-        decoder_embedding = mx.concatenate([logp_embedding, tpsa_embedding], axis=-1)  # [num_samples, 2*embedding_dim]
+        # Concatenate properties with z for conditioning
+        properties_combined = mx.array([[norm_logp, norm_tpsa]] * num_samples)  # [num_samples, 2]
+        z_conditioned = mx.concatenate([z, properties_combined], axis=-1)  # [num_samples, latent_dim+2]
         
-        # Decode with combined conditioning
-        samples = self._decode_conditional(z, decoder_embedding, temperature, top_k)
+        # Decode with conditioned z
+        samples = self._decode_conditional(z_conditioned, None, temperature, top_k)
         return samples
 
     def _decode_conditional(self, z, property_embedding, temperature, top_k):

@@ -30,12 +30,8 @@ class SelfiesTransformerEncoder(nn.Module):
             for _ in range(num_layers)
         ]
         
-        # FILM layers for property conditioning (best practice for CVAE)
-        # Property embedding is concatenated (logp + tpsa = 2*embedding_dim)
-        self.film_layers = [
-            FILM(embedding_dim, 2 * embedding_dim)
-            for _ in range(num_layers)
-        ]
+        # Property conditioning now via concatenation with input, not FILM
+        self.film_layers = []
         
         # Output projection to latent space
         self.mu_projection = nn.Linear(embedding_dim, latent_dim)
@@ -68,21 +64,12 @@ class SelfiesTransformerEncoder(nn.Module):
         embedded = self.token_embedding(x)  # [B, T, embedding_dim]
         embedded = self.positional_encoding(embedded)
         
-        # Add property conditioning to embeddings (best practice for CVAE)
-        if property_embedding is not None:
-            property_embedding_expanded = mx.expand_dims(property_embedding, axis=1)  # [B, 1, embedding_dim]
-            embedded = embedded + property_embedding_expanded  # Broadcast across sequence
-        
         embedded = self.dropout(embedded)
         
-        # Pass through transformer encoder layers with FILM conditioning
+        # Pass through transformer encoder layers
         encoder_output = embedded
         for i, layer in enumerate(self.encoder_layers):
             encoder_output = layer(encoder_output, mask)
-            
-            # Apply FILM conditioning if properties provided (best practice for CVAE)
-            if property_embedding is not None:
-                encoder_output = self.film_layers[i](encoder_output, property_embedding)
         
         # Pool sequence to get sequence-level representation
         pooled = self.masked_pool(encoder_output, mask)

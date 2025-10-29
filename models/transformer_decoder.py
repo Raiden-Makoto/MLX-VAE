@@ -23,8 +23,9 @@ class SelfiesTransformerDecoder(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         self.positional_encoding = PositionalEncoding(embedding_dim)
         
-        # Project latent to embedding dimension
-        self.latent_projection = nn.Linear(latent_dim, embedding_dim)
+        # Project latent (+ properties) to embedding dimension
+        # Properties are concatenated: latent_dim + 2
+        self.latent_projection = nn.Linear(latent_dim + 2, embedding_dim)
         
         # Self-attention layers (not cross-attention!)
         self.decoder_layers = [
@@ -32,12 +33,9 @@ class SelfiesTransformerDecoder(nn.Module):
             for _ in range(num_layers)
         ]
         
-        # FILM layers for property conditioning
-        # Property embedding is concatenated (logp + tpsa = 2*embedding_dim)
-        self.film_layers = [
-            FILM(embedding_dim, 2 * embedding_dim)
-            for _ in range(num_layers)
-        ]
+        # Property conditioning is now via concatenation with z, not FILM
+        # Keep empty for compatibility
+        self.film_layers = []
         
         self.output_projection = nn.Linear(embedding_dim, vocab_size)
         self.dropout = nn.Dropout(dropout)
@@ -76,10 +74,6 @@ class SelfiesTransformerDecoder(nn.Module):
         for i, layer in enumerate(self.decoder_layers):
             # Self-attention with causal+padding mask
             decoder_output = layer(decoder_output, combined_mask)
-            
-            # Apply FILM conditioning
-            if property_embedding is not None:
-                decoder_output = self.film_layers[i](decoder_output, property_embedding)
         
         logits = self.output_projection(decoder_output)  # [B, T, vocab_size]
         return logits
