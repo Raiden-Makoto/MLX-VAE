@@ -279,7 +279,7 @@ def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
         
         # Forward pass without gradients
         result = model(batch, properties=properties, training=False, noise_std=noise_std)
-        logits, mu, logvar, _, _, _, _, _, _, _ = result
+        logits, mu, logvar = result[:3]  # Only need first 3 for validation
         loss = compute_loss(batch, logits, mu, logvar, beta, diversity_weight)
         
         total_loss, recon_loss, kl_loss, diversity_loss = loss
