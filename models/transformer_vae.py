@@ -168,7 +168,20 @@ class SelfiesTransformerVAE(nn.Module):
         predicted_logp = self.logp_predictor(z)  # [B, 1]
         predicted_properties = mx.concatenate([predicted_logp, predicted_tpsa], axis=1)  # [B, 2]
         
-        return logits, mu, logvar, predicted_properties, property_mu, property_logvar
+        # Return both property priors for KL computation
+        # Also return individual tpsa and logp priors if needed
+        if tpsa_properties is not None and logp_properties is not None:
+            tpsa_kl_mu = self.property_mu(tpsa_properties)
+            tpsa_kl_logvar = self.property_logvar(tpsa_properties)
+            logp_kl_mu = self.logp_mu(logp_properties)
+            logp_kl_logvar = self.logp_logvar(logp_properties)
+        else:
+            tpsa_kl_mu = None
+            tpsa_kl_logvar = None
+            logp_kl_mu = None
+            logp_kl_logvar = None
+        
+        return logits, mu, logvar, predicted_properties, property_mu, property_logvar, tpsa_kl_mu, tpsa_kl_logvar, logp_kl_mu, logp_kl_logvar
 
     def generate_conditional(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
         """Generate molecules with target LogP and TPSA values

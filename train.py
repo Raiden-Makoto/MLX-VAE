@@ -160,35 +160,59 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     def loss_fn(model):
         # batch_properties are already normalized from data preparation
         result = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
-        logits, mu, logvar, predicted_properties, property_kl_mu, property_kl_logvar = result
+        logits, mu, logvar, predicted_properties, property_kl_mu, property_kl_logvar, tpsa_kl_mu, tpsa_kl_logvar, logp_kl_mu, logp_kl_logvar = result
         
         # Get reconstruction and diversity losses (skip KL from compute_loss)
         _, recon_loss, _, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
         
-        # CVAE KL divergence: KL(q(z|x,c) || p(z|c))
-        # This trains property networks to match encoder's distribution
-        if property_kl_mu is not None and property_kl_logvar is not None:
-            # KL divergence between encoder posterior and property-conditioned prior
-            # KL(q(z|x,c) || p(z|c)) = KL(N(mu, sigma) || N(property_mu, property_sigma))
-            # Clip logvar for numerical stability
+        # Dual KL divergence: KL(q(z|x,c) || p(z|c))
+        # Compute separate KL losses for TPSA and LogP
+        if tpsa_kl_mu is not None and tpsa_kl_logvar is not None and logp_kl_mu is not None and logp_kl_logvar is not None:
+            # Both properties are being used
+            logvar_clipped = mx.clip(logvar, -5, 5)
+            
+            # TPSA KL loss
+            tpsa_logvar_clipped = mx.clip(tpsa_kl_logvar, -5, 5)
+            tpsa_log_var_ratio = tpsa_logvar_clipped - logvar_clipped
+            tpsa_mu_diff_sq = (mu - tpsa_kl_mu) ** 2
+            tpsa_kl_loss = 0.5 * mx.sum(
+                tpsa_log_var_ratio
+                + mx.exp(logvar_clipped - tpsa_logvar_clipped)
+                + tpsa_mu_diff_sq * mx.exp(-tpsa_logvar_clipped)
+                - 1.0,
+                axis=1
+            )
+            tpsa_kl_loss = mx.clip(mx.mean(tpsa_kl_loss), 0, 1000)
+            
+            # LogP KL loss
+            logp_logvar_clipped = mx.clip(logp_kl_logvar, -5, 5)
+            logp_log_var_ratio = logp_logvar_clipped - logvar_clipped
+            logp_mu_diff_sq = (mu - logp_kl_mu) ** 2
+            logp_kl_loss = 0.5 * mx.sum(
+                logp_log_var_ratio
+                + mx.exp(logvar_clipped - logp_logvar_clipped)
+                + logp_mu_diff_sq * mx.exp(-logp_logvar_clipped)
+                - 1.0,
+                axis=1
+            )
+            logp_kl_loss = mx.clip(mx.mean(logp_kl_loss), 0, 1000)
+            
+            # Combined KL loss
+            kl_loss = (tpsa_kl_loss + logp_kl_loss) / 2
+        elif property_kl_mu is not None and property_kl_logvar is not None:
+            # Single property (backward compatibility)
             logvar_clipped = mx.clip(logvar, -5, 5)
             property_logvar_clipped = mx.clip(property_kl_logvar, -5, 5)
-            
-            # Compute KL with numerical stability (log-space)
-            # KL(q||p) = 0.5 * (log(|Σ_p|/|Σ_q|) + tr(Σ_q * Σ_p^-1) + (μ_q-μ_p)^T * Σ_p^-1 * (μ_q-μ_p) - d)
             log_var_ratio = property_logvar_clipped - logvar_clipped
             mu_diff_sq = (mu - property_kl_mu) ** 2
-            
             kl_loss = 0.5 * mx.sum(
                 log_var_ratio
-                + mx.exp(logvar_clipped - property_logvar_clipped)  # exp(logvar - property_logvar)
-                + mu_diff_sq * mx.exp(-property_logvar_clipped)  # (mu_diff^2) * exp(-property_logvar)
+                + mx.exp(logvar_clipped - property_logvar_clipped)
+                + mu_diff_sq * mx.exp(-property_logvar_clipped)
                 - 1.0,
-                axis=1  # Sum over latent dimensions
+                axis=1
             )
-            
-            kl_loss = mx.clip(kl_loss, 0, 1000)  # Clip to prevent explosion
-            kl_loss = mx.mean(kl_loss)  # Average over batch
+            kl_loss = mx.clip(mx.mean(kl_loss), 0, 1000)
         else:
             # Standard VAE: KL(q(z|x) || N(0,1))
             logvar_clipped = mx.clip(logvar, -10, 10)
