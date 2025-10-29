@@ -134,14 +134,8 @@ class SelfiesTransformerVAE(nn.Module):
             tpsa_emb = self.property_encoder_tpsa(tpsa_properties)  # [B, embedding_dim]
             film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)  # [B, 2*embedding_dim]
         
-        # Concatenate properties with z for decoder conditioning (CVAE best practice)
-        if tpsa_properties is not None and logp_properties is not None:
-            properties_combined = mx.concatenate([logp_properties, tpsa_properties], axis=-1)  # [B, 2]
-            z_conditioned = mx.concatenate([z, properties_combined], axis=-1)  # [B, latent_dim+2]
-        else:
-            z_conditioned = z
-        
-        logits = self.decoder(z_conditioned, input_seq, film_embedding)
+        # Decode with z (not z+properties) and FILM conditioning
+        logits = self.decoder(z, input_seq, film_embedding)
         
         # Predict both properties
         predicted_tpsa = self.tpsa_predictor(z)  # [B, 1]
@@ -183,12 +177,8 @@ class SelfiesTransformerVAE(nn.Module):
         tpsa_emb = self.property_encoder_tpsa(tpsa_array)  # [num_samples, embedding_dim]
         film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)  # [num_samples, 2*embedding_dim]
         
-        # Concatenate properties with z for conditioning (CVAE best practice)
-        properties_combined = mx.array([[norm_logp, norm_tpsa]] * num_samples)  # [num_samples, 2]
-        z_conditioned = mx.concatenate([z, properties_combined], axis=-1)  # [num_samples, latent_dim+2]
-        
-        # Decode with conditioned z and FILM embeddings
-        samples = self._decode_conditional(z_conditioned, film_embedding, temperature, top_k)
+        # Decode with z (not z+properties) and FILM embeddings
+        samples = self._decode_conditional(z, film_embedding, temperature, top_k)
         return samples
 
     def _decode_conditional(self, z, property_embedding, temperature, top_k):

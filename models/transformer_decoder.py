@@ -23,9 +23,8 @@ class SelfiesTransformerDecoder(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         self.positional_encoding = PositionalEncoding(embedding_dim)
         
-        # Project latent (+ properties) to embedding dimension
-        # Properties are concatenated: latent_dim + 2
-        self.latent_projection = nn.Linear(latent_dim + 2, embedding_dim)
+        # Project latent to embedding dimension (z alone, not z+properties)
+        self.latent_projection = nn.Linear(latent_dim, embedding_dim)
         
         # Self-attention layers (not cross-attention!)
         self.decoder_layers = [
