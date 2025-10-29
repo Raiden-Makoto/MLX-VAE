@@ -200,8 +200,10 @@ class SelfiesTransformerVAE(nn.Module):
         else:
             norm_logp = target_logp
         
-        # Create TPSA property array for prior network
+        # Create property arrays for prior networks
         tpsa_array = mx.array([[norm_tpsa]] * num_samples)  # [num_samples, 1]
+        logp_array = mx.array([[norm_logp]] * num_samples)  # [num_samples, 1]
+        
         tpsa_embedding = self.property_encoder(tpsa_array)  # [num_samples, embedding_dim]
         
         # Sample z from DUAL property-conditioned prior
@@ -220,7 +222,6 @@ class SelfiesTransformerVAE(nn.Module):
         z = property_mu + std * noise
         
         # Create LogP embedding for decoder conditioning
-        logp_array = mx.array([[norm_logp]] * num_samples)  # [num_samples, 1]
         logp_embedding = self.logp_encoder(logp_array)  # [num_samples, embedding_dim]
         
         # Combine TPSA + LogP embeddings for decoder
