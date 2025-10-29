@@ -73,7 +73,8 @@ def load_best_model(checkpoint_dir='checkpoints', **model_kwargs):
         
         model = SelfiesTransformerVAE(**model_kwargs_from_checkpoint)
         model.set_property_normalization(
-            0.0, 1.0,  # LogP params ignored
+            norm_stats.get('logp_mean', 0.0),
+            norm_stats.get('logp_std', 1.0),
             norm_stats['tpsa_mean'],
             norm_stats['tpsa_std']
         )
