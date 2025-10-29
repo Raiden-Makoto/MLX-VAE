@@ -207,15 +207,15 @@ class SelfiesTransformerVAE(nn.Module):
         tpsa_embedding = self.property_encoder(tpsa_array)  # [num_samples, embedding_dim]
         
         # Sample z from DUAL property-conditioned prior
-        # Average the TPSA and LogP prior networks
+        # Weight TPSA more heavily since it's stronger signal
         tpsa_mu = self.property_mu(tpsa_array)  # [num_samples, latent_dim]
         tpsa_logvar = self.property_logvar(tpsa_array)  # [num_samples, latent_dim]
         logp_mu = self.logp_mu(logp_array)  # [num_samples, latent_dim]
         logp_logvar = self.logp_logvar(logp_array)  # [num_samples, latent_dim]
         
-        # Combine both priors
-        property_mu = (tpsa_mu + logp_mu) / 2
-        property_logvar = (tpsa_logvar + logp_logvar) / 2
+        # Weighted combination: TPSA has stronger conditioning
+        property_mu = 0.7 * tpsa_mu + 0.3 * logp_mu
+        property_logvar = 0.7 * tpsa_logvar + 0.3 * logp_logvar
         
         std = mx.exp(0.5 * property_logvar)
         noise = mx.random.normal((num_samples, self.latent_dim))
