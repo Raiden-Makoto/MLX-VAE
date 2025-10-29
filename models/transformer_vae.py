@@ -27,42 +27,30 @@ class SelfiesTransformerVAE(nn.Module):
         )
         self.latent_dim = latent_dim
         
-        # TPSA conditioning (prior network for z sampling)
-        self.property_encoder = nn.Sequential(
-            nn.Linear(1, hidden_dim),  # TPSA only
-            nn.ReLU(),
-            nn.Linear(hidden_dim, embedding_dim)
-        )
-        
-        # TPSA-conditioned latent distribution parameters (for prior p(z|c))
-        self.property_mu = nn.Sequential(
-            nn.Linear(1, hidden_dim),
+        # Joint property conditioning (takes both LogP and TPSA)
+        # ONE joint prior network that takes [logp, tpsa] as input
+        self.joint_property_mu = nn.Sequential(
+            nn.Linear(2, hidden_dim),  # [logp, tpsa]
             nn.ReLU(),
             nn.Linear(hidden_dim, latent_dim)
         )
-        self.property_logvar = nn.Sequential(
-            nn.Linear(1, hidden_dim),
+        self.joint_property_logvar = nn.Sequential(
+            nn.Linear(2, hidden_dim),  # [logp, tpsa]
             nn.ReLU(),
             nn.Linear(hidden_dim, latent_dim)
         )
         
-        # LogP conditioning - BOTH prior network AND decoder
-        # LogP-conditioned latent distribution parameters (for prior p(z|c))
-        self.logp_mu = nn.Sequential(
+        # FILM embeddings (concatenated for decoder)
+        # Keep separate encoders but will concatenate later
+        self.property_encoder_logp = nn.Sequential(
             nn.Linear(1, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, latent_dim)
+            nn.Linear(hidden_dim, embedding_dim // 2)  # Half size for concatenation
         )
-        self.logp_logvar = nn.Sequential(
+        self.property_encoder_tpsa = nn.Sequential(
             nn.Linear(1, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, latent_dim)
-        )
-        # LogP encoder for decoder conditioning
-        self.logp_encoder = nn.Sequential(
-            nn.Linear(1, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, embedding_dim)
+            nn.Linear(hidden_dim, embedding_dim // 2)  # Half size for concatenation
         )
         
         # Property prediction heads
@@ -114,51 +102,50 @@ class SelfiesTransformerVAE(nn.Module):
                 # Single property (assume TPSA)
                 tpsa_properties = properties  # [B, 1]
         
-        # TPSA conditioning for prior network
+        # Get FILM embeddings for decoder
         tpsa_embedding = None
+        logp_embedding = None
         if tpsa_properties is not None:
-            tpsa_embedding = self.property_encoder(tpsa_properties)  # [B, embedding_dim]
+            tpsa_embedding = self.property_encoder_tpsa(tpsa_properties)  # [B, embedding_dim]
+        if logp_properties is not None:
+            logp_embedding = self.property_encoder_logp(logp_properties)  # [B, embedding_dim]
         
-        # Encoder gets TPSA conditioning
-        mu, logvar = self.encoder(input_seq, tpsa_embedding)
+        # Combine FILM embeddings
+        decoder_embedding = None
+        if tpsa_embedding is not None and logp_embedding is not None:
+            # Concatenate both embeddings for FILM
+            decoder_embedding = mx.concatenate([logp_embedding, tpsa_embedding], axis=-1)  # [B, 2*embedding_dim]
+        elif tpsa_embedding is not None:
+            decoder_embedding = tpsa_embedding
+        elif logp_embedding is not None:
+            decoder_embedding = logp_embedding
+        
+        # Encoder gets combined conditioning (or single property)
+        combined_encoder_embedding = decoder_embedding if decoder_embedding is not None else tpsa_embedding
+        mu, logvar = self.encoder(input_seq, combined_encoder_embedding)
         z = self.reparameterize(mu, logvar)
         
-        # Property-conditioned priors p(z | properties)
-        # For KL computation, need both property_mu and property_logvar
-        # If both properties provided, combine them; else use single property
+        # Joint property-conditioned prior p(z | [logp, tpsa])
+        # ONE joint prior network (not averaging separate priors)
         if tpsa_properties is not None and logp_properties is not None:
-            # Dual property conditioning: average the prior networks
-            tpsa_mu = self.property_mu(tpsa_properties)
-            tpsa_logvar = self.property_logvar(tpsa_properties)
-            logp_mu = self.logp_mu(logp_properties)
-            logp_logvar = self.logp_logvar(logp_properties)
-            property_mu = (tpsa_mu + logp_mu) / 2
-            property_logvar = (tpsa_logvar + logp_logvar) / 2
+            # Joint input: concatenate both properties [B, 2]
+            joint_input = mx.concatenate([logp_properties, tpsa_properties], axis=-1)  # [B, 2]
+            joint_mu = self.joint_property_mu(joint_input)
+            joint_logvar = self.joint_property_logvar(joint_input)
         elif tpsa_properties is not None:
-            property_mu = self.property_mu(tpsa_properties)
-            property_logvar = self.property_logvar(tpsa_properties)
-        elif logp_properties is not None:
-            property_mu = self.logp_mu(logp_properties)
-            property_logvar = self.logp_logvar(logp_properties)
+            # Single property: use joint with zero-padded logp
+            # For backwards compatibility, treat TPSA-only as joint with logp=0
+            joint_input = mx.concatenate([mx.zeros_like(tpsa_properties), tpsa_properties], axis=-1)
+            joint_mu = self.joint_property_mu(joint_input)
+            joint_logvar = self.joint_property_logvar(joint_input)
         else:
-            property_mu = None
-            property_logvar = None
+            joint_mu = None
+            joint_logvar = None
         
         # Add noise during training
         if training and noise_std > 0:
             noise = mx.random.normal(z.shape) * noise_std
             z = z + noise
-        
-        # Combine embeddings for decoder
-        # TPSA modulates latent structure, LogP modulates decoder features
-        decoder_embedding = tpsa_embedding
-        if logp_properties is not None:
-            logp_embedding = self.logp_encoder(logp_properties)  # [B, embedding_dim]
-            if decoder_embedding is None:
-                decoder_embedding = logp_embedding
-            else:
-                # Combine both embeddings
-                decoder_embedding = decoder_embedding + logp_embedding
         
         # Decode with combined conditioning
         logits = self.decoder(z, input_seq, decoder_embedding)
@@ -168,25 +155,10 @@ class SelfiesTransformerVAE(nn.Module):
         predicted_logp = self.logp_predictor(z)  # [B, 1]
         predicted_properties = mx.concatenate([predicted_logp, predicted_tpsa], axis=1)  # [B, 2]
         
-        # Return both property priors for KL computation
-        # Also return individual tpsa and logp priors if needed
-        if tpsa_properties is not None and logp_properties is not None:
-            tpsa_kl_mu = self.property_mu(tpsa_properties)
-            tpsa_kl_logvar = self.property_logvar(tpsa_properties)
-            logp_kl_mu = self.logp_mu(logp_properties)
-            logp_kl_logvar = self.logp_logvar(logp_properties)
-        else:
-            tpsa_kl_mu = None
-            tpsa_kl_logvar = None
-            logp_kl_mu = None
-            logp_kl_logvar = None
-        
-        return logits, mu, logvar, predicted_properties, property_mu, property_logvar, tpsa_kl_mu, tpsa_kl_logvar, logp_kl_mu, logp_kl_logvar
+        return logits, mu, logvar, predicted_properties, joint_mu, joint_logvar, None, None, None, None
 
     def generate_conditional(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
-        """Generate molecules with target LogP and TPSA values
-        
-        TPSA conditions the prior (z sampling), LogP conditions the decoder (FILM)"""
+        """Generate molecules with target LogP and TPSA values using JOINT prior"""
         print(f" Generating molecules with LogP={target_logp}, TPSA={target_tpsa}")
         
         # Normalize properties if normalization params are set
@@ -200,32 +172,25 @@ class SelfiesTransformerVAE(nn.Module):
         else:
             norm_logp = target_logp
         
-        # Create property arrays for prior networks
-        tpsa_array = mx.array([[norm_tpsa]] * num_samples)  # [num_samples, 1]
-        logp_array = mx.array([[norm_logp]] * num_samples)  # [num_samples, 1]
+        # JOINT prior input: concatenate [logp, tpsa]
+        joint_input = mx.array([[norm_logp, norm_tpsa]] * num_samples)  # [num_samples, 2]
+        joint_mu = self.joint_property_mu(joint_input)
+        joint_logvar = self.joint_property_logvar(joint_input)
         
-        tpsa_embedding = self.property_encoder(tpsa_array)  # [num_samples, embedding_dim]
-        
-        # Sample z from DUAL property-conditioned prior
-        # Weight TPSA more heavily since it's stronger signal
-        tpsa_mu = self.property_mu(tpsa_array)  # [num_samples, latent_dim]
-        tpsa_logvar = self.property_logvar(tpsa_array)  # [num_samples, latent_dim]
-        logp_mu = self.logp_mu(logp_array)  # [num_samples, latent_dim]
-        logp_logvar = self.logp_logvar(logp_array)  # [num_samples, latent_dim]
-        
-        # Weighted combination: TPSA has stronger conditioning
-        property_mu = 0.7 * tpsa_mu + 0.3 * logp_mu
-        property_logvar = 0.7 * tpsa_logvar + 0.3 * logp_logvar
-        
-        std = mx.exp(0.5 * property_logvar)
+        # Sample z from JOINT prior
+        std = mx.exp(0.5 * joint_logvar)
         noise = mx.random.normal((num_samples, self.latent_dim))
-        z = property_mu + std * noise
+        z = joint_mu + std * noise
         
-        # Create LogP embedding for decoder conditioning
-        logp_embedding = self.logp_encoder(logp_array)  # [num_samples, embedding_dim]
+        # Get FILM embeddings for decoder
+        logp_array = mx.array([[norm_logp]] * num_samples)  # [num_samples, 1]
+        tpsa_array = mx.array([[norm_tpsa]] * num_samples)  # [num_samples, 1]
         
-        # Combine TPSA + LogP embeddings for decoder
-        decoder_embedding = tpsa_embedding + logp_embedding
+        logp_embedding = self.property_encoder_logp(logp_array)  # [num_samples, embedding_dim]
+        tpsa_embedding = self.property_encoder_tpsa(tpsa_array)  # [num_samples, embedding_dim]
+        
+        # Concatenate both embeddings for FILM
+        decoder_embedding = mx.concatenate([logp_embedding, tpsa_embedding], axis=-1)  # [num_samples, 2*embedding_dim]
         
         # Decode with combined conditioning
         samples = self._decode_conditional(z, decoder_embedding, temperature, top_k)
