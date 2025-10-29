@@ -33,8 +33,9 @@ class SelfiesTransformerDecoder(nn.Module):
         ]
         
         # FILM layers for property conditioning
+        # Property embedding is concatenated (logp + tpsa = 2*embedding_dim)
         self.film_layers = [
-            FILM(embedding_dim, embedding_dim)
+            FILM(embedding_dim, 2 * embedding_dim)
             for _ in range(num_layers)
         ]
         
@@ -65,10 +66,8 @@ class SelfiesTransformerDecoder(nn.Module):
         latent_expanded = mx.expand_dims(latent_embedding, axis=1)  # [B, 1, embedding_dim]
         embedded = embedded + latent_expanded  # [B, T, embedding_dim]
         
-        # Add property conditioning if provided
-        if property_embedding is not None:
-            property_expanded = mx.expand_dims(property_embedding, axis=1)
-            embedded = embedded + property_expanded
+        # Property conditioning is applied via FILM layers only
+        # Skip broadcasting to prevent shape mismatches
         
         embedded = self.dropout(embedded)
         

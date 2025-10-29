@@ -41,16 +41,16 @@ class SelfiesTransformerVAE(nn.Module):
         )
         
         # FILM embeddings (concatenated for decoder)
-        # Keep separate encoders but will concatenate later
+        # Each outputs full embedding_dim, concatenate to 2*embedding_dim
         self.property_encoder_logp = nn.Sequential(
             nn.Linear(1, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, embedding_dim // 2)  # Half size for concatenation
+            nn.Linear(hidden_dim, embedding_dim)
         )
         self.property_encoder_tpsa = nn.Sequential(
             nn.Linear(1, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, embedding_dim // 2)  # Half size for concatenation
+            nn.Linear(hidden_dim, embedding_dim)
         )
         
         # Property prediction heads

@@ -31,8 +31,9 @@ class SelfiesTransformerEncoder(nn.Module):
         ]
         
         # FILM layers for property conditioning (best practice for CVAE)
+        # Property embedding is concatenated (logp + tpsa = 2*embedding_dim)
         self.film_layers = [
-            FILM(embedding_dim, embedding_dim)
+            FILM(embedding_dim, 2 * embedding_dim)
             for _ in range(num_layers)
         ]
         
