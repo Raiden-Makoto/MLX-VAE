@@ -219,7 +219,8 @@ class SelfiesTransformerVAE(nn.Module):
                 
             # Sample from logits distribution instead of greedy
             probs = mx.softmax(logits, axis=-1)
-            next_token = mx.random.categorical(probs)
+            next_token = mx.random.categorical(probs, axis=-1)
+            next_token = mx.expand_dims(next_token, axis=-1)  # Add keepdims dimension
             next_token = next_token.astype(mx.int32)
             
             # Update seq so decoder sees previous tokens

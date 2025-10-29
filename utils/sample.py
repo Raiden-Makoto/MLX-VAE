@@ -169,10 +169,10 @@ def tokens_to_selfies(tokens):
                 token_key = str(int(token_idx))
                 if token_key in idx_to_token:
                     token = idx_to_token[token_key]
-                    if token == '<END>' or token == '<PAD>':
+                    if token == '<END>' or token == '[END]' or token == '<PAD>' or token == '[PAD]':
                         break
                     # Skip <START> token in output
-                    if token != '<START>':
+                    if token != '<START>' and token != '[START]':
                         tokens_list.append(token)
         except (IndexError, ValueError) as e:
             print(f"Warning: Error processing sequence {i}: {e}")
