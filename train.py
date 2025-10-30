@@ -1,6 +1,5 @@
 from models.transformer_vae import SelfiesTransformerVAE
 from utils.loss import compute_loss
-from utils.sample import sample_from_vae
 from mlx_data.dataloader import create_batches
 
 import mlx.core as mx
@@ -26,13 +25,13 @@ parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs t
 parser.add_argument('--max_beta', type=float, default=1.0, help='Maximum beta value (CVAE best practice: 1.0 for full KL divergence)')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
-parser.add_argument('--property_weight', type=float, default=1.0, help='Weight for property prediction loss')
 parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads (FIXED at 4)')
 parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers (FIXED at 4)')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (epochs without improvement)')
 parser.add_argument('--val_freq', type=int, default=5, help='Validate every N epochs')
+ # Predictor training moved to train_predictor.py to keep this file focused
 
 # Load data and metadata
 with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
@@ -69,25 +68,21 @@ args.num_heads = 4
 tokenized_mx = mx.array(tokenized)
 properties_mx = mx.array(properties)
 
-# Use create_batches from dataloader, but pair with properties
-# Shuffle data and properties together
-if True:  # Always shuffle
-    n_samples = tokenized_mx.shape[0]
-    indices = mx.random.permutation(mx.arange(n_samples))
-    tokenized_mx = tokenized_mx[indices]
-    properties_mx = properties_mx[indices]
+# Shuffle
+n_samples = tokenized_mx.shape[0]
+indices = mx.random.permutation(mx.arange(n_samples))
+tokenized_mx = tokenized_mx[indices]
+properties_mx = properties_mx[indices]
 
-# Create batches using existing function (handles properties automatically)
-batches = create_batches(tokenized_mx, properties_mx, args.batch_size, shuffle=False)  # Already shuffled above
-
-# Split into train and validation sets
+# Batches
+batches = create_batches(tokenized_mx, properties_mx, args.batch_size, shuffle=False)
 train_size = int(0.9 * len(batches))
 train_batches = batches[:train_size]
 val_batches = batches[train_size:]
 
 print(f"Total batches: {len(batches)}, Train: {len(train_batches)}, Validation: {len(val_batches)}")
 
-# Initialize model and optimizer
+# Initialize model/optimizer
 print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
 print(f"Transformer config: num_heads={args.num_heads}, num_layers={args.num_layers}, dropout={args.dropout}")
 
@@ -100,38 +95,28 @@ model = SelfiesTransformerVAE(
     num_layers=args.num_layers,
     dropout=args.dropout
 )
-
-# Set property normalization
 model.set_property_normalization(logp_mean, logp_std, tpsa_mean, tpsa_std)
 optimizer = Adam(learning_rate=args.learning_rate)
 
-# Create output directory
+# Output dir
 os.makedirs(args.output_dir, exist_ok=True)
 
-# Resume from best model if specified
+# Resume
 start_epoch = 0
 if args.resume:
     print(f"Resuming training...")
-    
-    # Load last epoch from text file
     last_epoch_file = os.path.join(args.output_dir, 'last_epoch.txt')
     if os.path.exists(last_epoch_file):
         with open(last_epoch_file, 'r') as f:
             last_completed_epoch = int(f.read().strip())
-            start_epoch = last_completed_epoch + 1  # Resume from next epoch
+            start_epoch = last_completed_epoch + 1
         print(f"Resuming from epoch {start_epoch} (last completed: {last_completed_epoch})")
-    else:
-        print("No last_epoch.txt found, starting from epoch 1")
-    
-    # Load best model weights if available
     best_model_path = os.path.join(args.output_dir, 'best_model.npz')
     if os.path.exists(best_model_path):
         print(f"Loading best model weights from: {best_model_path}")
         model.load_weights(best_model_path)
-        # Also load normalization stats if available
         norm_file = os.path.join(args.output_dir, 'property_norm.json')
         if os.path.exists(norm_file):
-            import json
             with open(norm_file, 'r') as f:
                 norm_stats = json.load(f)
             model.set_property_normalization(
@@ -140,281 +125,88 @@ if args.resume:
                 norm_stats['tpsa_mean'],
                 norm_stats['tpsa_std']
             )
-    else:
-        print("No best_model.npz found, starting from scratch...")
 
-# Best model tracking and early stopping
+# Best tracking
 best_loss = float('inf')
 best_model_path = os.path.join(args.output_dir, 'best_model.npz')
-patience_counter = 0
-last_val_loss = float('inf')
 
-# Training function
-def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01, property_weight=1.0, batch_idx=0):
-    """Single training step"""
-    # Store losses for access after computation
-    stored_losses = {}
-    
+# Training step
+def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01):
+    stored = {}
     def loss_fn(model):
-        # batch_properties are already normalized from data preparation
-        result = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
-        logits, mu, logvar, predicted_properties, joint_kl_mu, joint_kl_logvar, tpsa_kl_mu, tpsa_kl_logvar, logp_kl_mu, logp_kl_logvar = result
-        
-        # Get reconstruction and diversity losses (skip KL from compute_loss)
-        _, recon_loss, _, diversity_loss = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
-        
-        # Joint KL divergence: KL(q(z|x,c) || p(z|[logp,tpsa]))
-        # Single joint prior that takes both properties as concatenated input
-        if joint_kl_mu is not None and joint_kl_logvar is not None:
-            # Joint property conditioning
-            logvar_clipped = mx.clip(logvar, -5, 5)
-            joint_logvar_clipped = mx.clip(joint_kl_logvar, -5, 5)
-            
-            # Compute KL with numerical stability
-            log_var_ratio = joint_logvar_clipped - logvar_clipped
-            mu_diff_sq = (mu - joint_kl_mu) ** 2
-            
-            kl_loss = 0.5 * mx.sum(
-                log_var_ratio
-                + mx.exp(logvar_clipped - joint_logvar_clipped)
-                + mu_diff_sq * mx.exp(-joint_logvar_clipped)
-                - 1.0,
-                axis=1
-            )
-            kl_loss = mx.clip(mx.mean(kl_loss), 0, 1000)
-        else:
-            # Standard VAE: KL(q(z|x) || N(0,1))
-            logvar_clipped = mx.clip(logvar, -10, 10)
-            kl_loss = -0.5 * mx.mean(1 + logvar_clipped - mu**2 - mx.exp(logvar_clipped))
-        
-        # Separate property prediction losses (both already normalized)
-        # predicted_properties is [B, 2] with [logp, tpsa] in normalized space
-        # batch_properties is [B, 2] with [logp, tpsa] in normalized space
-        predicted_properties = mx.clip(predicted_properties, -10, 10)
-        
-        # Check for NaN/Inf
-        if mx.any(mx.isnan(predicted_properties)) or mx.any(mx.isinf(predicted_properties)):
-            print(f"WARNING: predicted_properties contains NaN/Inf - skipping property loss")
-            logp_loss = mx.array(0.0)
-            tpsa_loss = mx.array(0.0)
-        else:
-            # Simple MSE in normalized space (no std² division needed)
-            logp_loss = mx.mean((predicted_properties[:, 0] - batch_properties[:, 0]) ** 2)
-            tpsa_loss = mx.mean((predicted_properties[:, 1] - batch_properties[:, 1]) ** 2)
-        
-        # Combined property prediction loss (both already normalized)
-        property_loss = logp_loss + tpsa_loss
-        
-        # Compute MAE for diagnostics
-        if mx.any(mx.isnan(predicted_properties)) or mx.any(mx.isinf(predicted_properties)):
-            logp_mae = mx.array(999.0)
-            tpsa_mae = mx.array(999.0)
-        else:
-            # Denormalize for MAE
-            pred_logp_raw = predicted_properties[:, 0] * model.logp_std + model.logp_mean
-            pred_tpsa_raw = predicted_properties[:, 1] * model.tpsa_std + model.tpsa_mean
-            batch_logp_raw = batch_properties[:, 0] * model.logp_std + model.logp_mean
-            batch_tpsa_raw = batch_properties[:, 1] * model.tpsa_std + model.tpsa_mean
-            
-            logp_mae = mx.mean(mx.abs(pred_logp_raw - batch_logp_raw))
-            tpsa_mae = mx.mean(mx.abs(pred_tpsa_raw - batch_tpsa_raw))
-        
-        # Store losses for later (evaluate immediately)
-        stored_losses['recon'] = float(recon_loss.item())
-        stored_losses['kl'] = float(kl_loss.item())
-        stored_losses['diversity'] = float(diversity_loss.item())
-        stored_losses['property'] = float(property_loss.item())
-        stored_losses['logp_mae'] = float(logp_mae.item())
-        stored_losses['tpsa_mae'] = float(tpsa_mae.item())
-        stored_losses['logp_loss'] = float(logp_loss.item())
-        stored_losses['tpsa_loss'] = float(tpsa_loss.item())
-        
-        # Weighted total loss
-        total_loss = recon_loss + beta * kl_loss + diversity_weight * diversity_loss + property_weight * property_loss
-        
-        return total_loss
-    
-    # Compute loss and gradients
-    loss, grads = mx.value_and_grad(loss_fn)(model)
-    
-    total_loss = loss
-    recon_loss = stored_losses['recon']
-    kl_loss = stored_losses['kl']
-    diversity_loss = stored_losses['diversity']
-    property_loss = stored_losses['property']
-    logp_mae = stored_losses['logp_mae']
-    tpsa_mae = stored_losses['tpsa_mae']
-    logp_loss = stored_losses['logp_loss']
-    tpsa_loss = stored_losses['tpsa_loss']
-    
-    # Clip gradients to prevent explosion
-    def clip_grads(grads):
-        clipped = {}
-        for key, value in grads.items():
-            if isinstance(value, dict):
-                clipped[key] = clip_grads(value)
-            elif isinstance(value, list):
-                clipped[key] = [mx.clip(v, -1.0, 1.0) if hasattr(v, 'shape') else v for v in value]
-            else:
-                clipped[key] = mx.clip(value, -1.0, 1.0)
-        return clipped
-    
-    grads = clip_grads(grads)
-    
-    # Update parameters
+        logits, mu, logvar = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
+        total, recon, kl, diversity = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
+        stored['recon'] = float(recon.item())
+        stored['kl'] = float(kl.item())
+        stored['diversity'] = float(diversity.item())
+        return total
+    total_loss, grads = mx.value_and_grad(loss_fn)(model)
     optimizer.update(model, grads)
-    
-    return total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae, logp_loss, tpsa_loss
+    return total_loss, stored['recon'], stored['kl'], stored['diversity']
 
-# Validation function
+# Validation
 def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
-    """Validate model on validation set"""
-    total_val_loss = 0.0
-    total_recon_loss = 0.0
-    total_kl_loss = 0.0
-    total_diversity_loss = 0.0
-    
-    for batch_data in val_batches:
-        batch, properties = batch_data
-        
-        # Forward pass without gradients
-        result = model(batch, properties=properties, training=False, noise_std=noise_std)
-        logits, mu, logvar = result[:3]  # Only need first 3 for validation
-        loss = compute_loss(batch, logits, mu, logvar, beta, diversity_weight)
-        
-        total_loss, recon_loss, kl_loss, diversity_loss = loss
-        
-        total_val_loss += total_loss.item()
-        total_recon_loss += recon_loss.item()
-        total_kl_loss += kl_loss.item()
-        total_diversity_loss += diversity_loss.item()
-    
-    # Average losses
-    num_batches = len(val_batches)
-    avg_val_loss = total_val_loss / num_batches
-    avg_recon_loss = total_recon_loss / num_batches
-    avg_kl_loss = total_kl_loss / num_batches
-    avg_diversity_loss = total_diversity_loss / num_batches
-    
-    return avg_val_loss, avg_recon_loss, avg_kl_loss, avg_diversity_loss
+    total_val_loss = total_recon = total_kl = total_div = 0.0
+    for batch_data, properties in val_batches:
+        logits, mu, logvar = model(batch_data, properties=properties, training=False, noise_std=noise_std)
+        total, recon, kl, div = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
+        total_val_loss += total.item(); total_recon += recon.item(); total_kl += kl.item(); total_div += div.item()
+    n = len(val_batches)
+    return total_val_loss/n, total_recon/n, total_kl/n, total_div/n
 
-# Beta annealing function
-def get_beta(epoch, total_epochs, warmup_epochs, max_beta):
-    """Compute beta value with annealing"""
-    if epoch < warmup_epochs:
-        # Linear warmup from 0 to max_beta
-        return max_beta * (epoch / warmup_epochs)
-    else:
-        # Keep at max_beta after warmup
-        return max_beta
+# Beta schedule
+def get_beta(epoch, total_epochs, warm, max_beta):
+    if epoch < warm:
+        p = epoch / warm
+        return max_beta * (p ** 2)
+    return max_beta
 
-# Train model
-if start_epoch > 0:
-    # When resuming, train for args.epochs MORE epochs from where we left off
-    total_epochs = start_epoch + args.epochs
-    print(f"Resuming training for {args.epochs} more epochs (from epoch {start_epoch + 1} to {total_epochs})")
-else:
-    # When starting fresh, train for args.epochs total epochs
-    total_epochs = args.epochs
-    print(f"Training model for {total_epochs} epochs")
+# Train VAE as usual
+total_epochs = args.epochs if start_epoch == 0 else start_epoch + args.epochs
+print(f"Training model for {total_epochs} epochs")
 print(f"Batch size: {args.batch_size}, Learning rate: {args.learning_rate}")
-print(f"Beta warmup: {args.beta_warmup_epochs} epochs, Max beta: {args.max_beta}")
+print(f"Beta warmup: {args.beta_warmup_epochs} epochs (quadratic), Max beta: {args.max_beta}")
 print(f"Diversity weight: {args.diversity_weight}")
-print(f"Property weight: {args.property_weight}")
 print("="*67)
 
 for epoch in range(start_epoch, total_epochs):
-    # Compute beta for this epoch
-    current_beta = get_beta(epoch, args.epochs, args.beta_warmup_epochs, args.max_beta)
-    
-    epoch_losses = []
-    epoch_recon_losses = []
-    epoch_kl_losses = []
-    
-    # Training loop with progress bar
-    progress_bar = tqdm.tqdm(
-        train_batches, 
-        desc=f"Epoch {epoch+1}/{total_epochs} (β={current_beta:.3f})",
-        unit="batch",
-        leave=False
-    )
-    
-    epoch_tpsa_maes = []
-    epoch_tpsa_losses = []
-    
-    for batch_idx, (batch_data, batch_properties) in enumerate(progress_bar):
-        # Training step
-        total_loss, recon_loss, kl_loss, diversity_loss, property_loss, logp_mae, tpsa_mae, logp_loss, tpsa_loss = train_step(model, batch_data, batch_properties, optimizer, current_beta, args.latent_noise_std, args.diversity_weight, args.property_weight, batch_idx)
-        
-        # Store losses
-        epoch_losses.append(total_loss)
-        epoch_recon_losses.append(recon_loss)
-        epoch_kl_losses.append(kl_loss)
-        epoch_tpsa_maes.append(tpsa_mae)
-        epoch_tpsa_losses.append(tpsa_loss)
-        
-        # Update progress bar
-        if batch_idx % 10 == 0:  # Update every 10 batches
+    beta = get_beta(epoch, args.epochs, args.beta_warmup_epochs, args.max_beta)
+    epoch_losses, epoch_recon, epoch_kl = [], [], []
+    progress = tqdm.tqdm(train_batches, desc=f"Epoch {epoch+1}/{total_epochs} (β={beta:.3f})", unit="batch", leave=False)
+    for batch_idx, (batch_data, batch_properties) in enumerate(progress):
+        total, recon, kl, div = train_step(model, batch_data, batch_properties, optimizer, beta, args.latent_noise_std, args.diversity_weight)
+        epoch_losses.append(total); epoch_recon.append(recon); epoch_kl.append(kl)
+        if batch_idx % 10 == 0:
             avg_loss = mx.mean(mx.array(epoch_losses)).item()
-            avg_recon = mx.mean(mx.array(epoch_recon_losses)).item()
-            avg_kl = mx.mean(mx.array(epoch_kl_losses)).item()
-            avg_prop = property_loss  # Already a float from stored_losses
-            progress_bar.set_postfix({
-                'Loss': f'{avg_loss:.4f}',
-                'Recon': f'{avg_recon:.4f}',
-                'KL': f'{avg_kl:.4f}',
-                'Prop': f'{avg_prop:.4f}'
-            })
-    
-    # Calculate final epoch metrics
+            avg_recon = mx.mean(mx.array(epoch_recon)).item()
+            avg_kl = mx.mean(mx.array(epoch_kl)).item()
+            progress.set_postfix({ 'Loss': f'{avg_loss:.4f}', 'Recon': f'{avg_recon:.4f}', 'KL': f'{avg_kl:.4f}' })
     final_loss = mx.mean(mx.array(epoch_losses)).item()
-    final_recon = mx.mean(mx.array(epoch_recon_losses)).item()
-    final_kl = mx.mean(mx.array(epoch_kl_losses)).item()
-    avg_tpsa_mae = sum(epoch_tpsa_maes) / len(epoch_tpsa_maes)
-    
-    # Print property prediction MAE and loss diagnostics
-    print(f"\nEpoch {epoch+1}: TPSA MAE={avg_tpsa_mae:.2f}")
-    
-    # Also track per-property loss
-    avg_tpsa_loss = sum(epoch_tpsa_losses) / len(epoch_tpsa_losses)
-    print(f"TPSA loss: {avg_tpsa_loss:.4f}")
-    
-    # Save best model if this is the best loss so far
+    final_recon = mx.mean(mx.array(epoch_recon)).item()
+    final_kl = mx.mean(mx.array(epoch_kl)).item()
+    print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Total={final_loss:.4f}")
+    # Save best
     if final_loss < best_loss:
         best_loss = final_loss
         model.save_weights(best_model_path)
-        # Also save normalization stats and architecture params
-        import json
         norm_stats = {
-            'logp_mean': float(logp_mean),
-            'logp_std': float(logp_std),
-            'tpsa_mean': float(tpsa_mean),
-            'tpsa_std': float(tpsa_std),
-            # Save architecture parameters to ensure consistent loading
-            'embedding_dim': args.embedding_dim,
-            'hidden_dim': args.hidden_dim,
-            'latent_dim': args.latent_dim,
-            'num_heads': args.num_heads,
-            'num_layers': args.num_layers,
-            'dropout': args.dropout
+            'logp_mean': float(logp_mean), 'logp_std': float(logp_std),
+            'tpsa_mean': float(tpsa_mean), 'tpsa_std': float(tpsa_std),
+            'embedding_dim': args.embedding_dim, 'hidden_dim': args.hidden_dim,
+            'latent_dim': args.latent_dim, 'num_heads': args.num_heads,
+            'num_layers': args.num_layers, 'dropout': args.dropout
         }
         with open(f'{args.output_dir}/property_norm.json', 'w') as f:
             json.dump(norm_stats, f)
         print(f"New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
-    else:
-        print(f"  Skipping validation (next validation at epoch {((epoch + 1) // args.val_freq + 1) * args.val_freq})")
-    
     print("="*67)
-    
-    # Save checkpoint
     if (epoch + 1) % args.save_every == 0:
-        checkpoint_path = os.path.join(args.output_dir, f'checkpoint_epoch_{epoch+1}.npz')
-        model.save_weights(checkpoint_path)
-        print(f"Saved checkpoint: {checkpoint_path}")
-    
-    # Save last epoch
-    last_epoch_file = os.path.join(args.output_dir, 'last_epoch.txt')
-    with open(last_epoch_file, 'w') as f:
+        ckpt = os.path.join(args.output_dir, f'checkpoint_epoch_{epoch+1}.npz')
+        model.save_weights(ckpt)
+        print(f"Saved checkpoint: {ckpt}")
+    with open(os.path.join(args.output_dir, 'last_epoch.txt'), 'w') as f:
         f.write(str(epoch))
 
 print("Training completed!")
+
+# Predictor training removed from this file; use train_predictor.py

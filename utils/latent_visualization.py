@@ -83,8 +83,11 @@ def extract_latents(model, sequences, properties, batch_size=128):
         batch_mx = mx.array(batch)
         batch_props_mx = mx.array(batch_props)
         
-        # Get property embedding
-        prop_emb = model.property_encoder(batch_props_mx)
+        # Normalize properties using model stats and build encoder property embedding
+        logp_norm = (batch_props_mx[:, 0:1] - model.logp_mean) / model.logp_std if (model.logp_mean is not None and model.logp_std) else batch_props_mx[:, 0:1]
+        tpsa_norm = (batch_props_mx[:, 1:2] - model.tpsa_mean) / model.tpsa_std if (model.tpsa_mean is not None and model.tpsa_std) else batch_props_mx[:, 1:2]
+        joint_norm = mx.concatenate([logp_norm, tpsa_norm], axis=-1)
+        prop_emb = model.encoder_property_proj(joint_norm)
         
         # Get latent from encoder
         mu, logvar = model.encoder(batch_mx, prop_emb)
@@ -257,14 +260,19 @@ def compute_property_prediction_correlation(latents, properties, model):
     """Check if latent codes encode property information"""
     print("\n=== Checking if Latent Encodes Properties ===")
     
-    # Use property predictor
+    # Skip if model has no property predictors (FILM-only path)
+    if not (hasattr(model, 'logp_predictor') and hasattr(model, 'tpsa_predictor')):
+        print("Model has no property predictors; skipping correlation.")
+        return None, None
+    
+    # Predict properties from latent codes using model heads
     latents_mx = mx.array(latents)
-    pred_properties = model.property_predictor(latents_mx)
+    pred_logp_norm = model.logp_predictor(latents_mx)  # [N,1]
+    pred_tpsa_norm = model.tpsa_predictor(latents_mx)  # [N,1]
     
     # Convert to numpy and denormalize
-    pred_properties_np = np.array(pred_properties)
-    pred_logp = pred_properties_np[:, 0] * model.logp_std + model.logp_mean
-    pred_tpsa = pred_properties_np[:, 1] * model.tpsa_std + model.tpsa_mean
+    pred_logp = np.array(pred_logp_norm).squeeze() * model.logp_std + model.logp_mean
+    pred_tpsa = np.array(pred_tpsa_norm).squeeze() * model.tpsa_std + model.tpsa_mean
     
     true_logp = properties[:, 0]
     true_tpsa = properties[:, 1]

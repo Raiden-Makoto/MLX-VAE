@@ -1,0 +1,149 @@
+import os
+import json
+import tqdm
+
+import mlx.core as mx
+from mlx.optimizers import Adam
+
+from models.transformer_vae import SelfiesTransformerVAE
+from mlx_data.dataloader import create_batches
+
+
+def disable_all_dropout(model):
+    try:
+        if hasattr(model.encoder, 'dropout'):
+            model.encoder.dropout.p = 0.0
+        if hasattr(model.decoder, 'dropout'):
+            model.decoder.dropout.p = 0.0
+    except Exception:
+        pass
+    for layer in getattr(model.encoder, 'encoder_layers', []):
+        if hasattr(layer, 'dropout'):
+            try:
+                layer.dropout.p = 0.0
+            except Exception:
+                pass
+        if hasattr(layer, 'self_attn') and hasattr(layer.self_attn, 'dropout'):
+            try:
+                layer.self_attn.dropout.p = 0.0
+            except Exception:
+                pass
+        if hasattr(layer, 'feed_forward') and hasattr(layer.feed_forward, 'dropout'):
+            try:
+                layer.feed_forward.dropout.p = 0.0
+            except Exception:
+                pass
+    for layer in getattr(model.decoder, 'decoder_layers', []):
+        if hasattr(layer, 'dropout'):
+            try:
+                layer.dropout.p = 0.0
+            except Exception:
+                pass
+        if hasattr(layer, 'self_attn') and hasattr(layer.self_attn, 'dropout'):
+            try:
+                layer.self_attn.dropout.p = 0.0
+            except Exception:
+                pass
+        if hasattr(layer, 'feed_forward') and hasattr(layer.feed_forward, 'dropout'):
+            try:
+                layer.feed_forward.dropout.p = 0.0
+            except Exception:
+                pass
+
+
+def main():
+    import argparse
+    parser = argparse.ArgumentParser(description='Train TPSA→z predictor only')
+    parser.add_argument('--batch_size', type=int, default=128)
+    parser.add_argument('--learning_rate', type=float, default=1e-4)
+    parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--checkpoint_dir', type=str, default='checkpoints')
+    parser.add_argument('--embedding_dim', type=int, default=128)
+    parser.add_argument('--hidden_dim', type=int, default=256)
+    parser.add_argument('--latent_dim', type=int, default=256)
+    parser.add_argument('--num_heads', type=int, default=4)
+    parser.add_argument('--num_layers', type=int, default=4)
+    parser.add_argument('--dropout', type=float, default=0.1)
+    args = parser.parse_args()
+
+    # Load dataset/meta
+    with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
+        meta = json.load(f)
+    tokenized = mx.array(mx.array(json.loads(json.dumps([]))))
+    # Use numpy load for tokenized npy
+    import numpy as np
+    tokenized_np = np.load('mlx_data/chembl_cns_tokenized.npy')
+    tokenized_mx = mx.array(tokenized_np)
+
+    molecules = meta['molecules']
+    properties_raw = np.array([[mol.get('logp', 3.0), mol.get('tpsa', 82.0)] for mol in molecules], dtype=np.float32)
+    logp_mean = np.mean(properties_raw[:, 0]); logp_std = np.std(properties_raw[:, 0])
+    tpsa_mean = np.mean(properties_raw[:, 1]); tpsa_std = np.std(properties_raw[:, 1])
+    properties = np.array([
+        [(p[0] - logp_mean) / logp_std, (p[1] - tpsa_mean) / tpsa_std] for p in properties_raw
+    ], dtype=np.float32)
+    properties_mx = mx.array(properties)
+
+    # Batches
+    batches = create_batches(tokenized_mx, properties_mx, args.batch_size, shuffle=True)
+
+    # Build model and load VAE weights
+    model = SelfiesTransformerVAE(
+        vocab_size=meta['vocab_size'],
+        embedding_dim=args.embedding_dim,
+        hidden_dim=args.hidden_dim,
+        latent_dim=args.latent_dim,
+        num_heads=args.num_heads,
+        num_layers=args.num_layers,
+        dropout=args.dropout,
+    )
+    model.set_property_normalization(logp_mean, logp_std, tpsa_mean, tpsa_std)
+    best_path = os.path.join(args.checkpoint_dir, 'best_model.npz')
+    if os.path.exists(best_path):
+        try:
+            model.load_weights(best_path)
+            print(f"Loaded best VAE weights: {best_path}")
+        except Exception as e:
+            print(f"Warning: partial load, new params randomly init: {e}")
+    else:
+        print(f"Best model not found at {best_path}; proceeding with current weights")
+
+    # Disable dropout and set optimizer
+    disable_all_dropout(model)
+    optimizer = Adam(learning_rate=args.learning_rate)
+
+    # Train predictor only (stop gradients through encoder)
+    for ep in range(args.epochs):
+        ep_losses = []
+        progress = tqdm.tqdm(batches, desc=f"TPSA→z Epoch {ep+1}/{args.epochs}", unit="batch", leave=False)
+        for batch_data, batch_properties in progress:
+            tpsa_norm = batch_properties[:, 1:2]
+            input_seq = batch_data[:, :-1]
+            # Define loss over predictor parameters only to avoid optimizer state for full model
+            def loss_fn(predictor):
+                # Compute encoder targets with stopped gradients
+                mu, logvar = model.encoder(input_seq)
+                mu = mx.stop_gradient(mu)
+                logvar = mx.stop_gradient(logvar)
+                z_true = mx.stop_gradient(model.reparameterize(mu, logvar))
+                z_pred = predictor(tpsa_norm)
+                return mx.mean((z_pred - z_true) ** 2)
+            loss, grads = mx.value_and_grad(loss_fn)(model.tpsa_predictor)
+            optimizer.update(model.tpsa_predictor, grads)
+            ep_losses.append(loss)
+            if len(ep_losses) % 10 == 0:
+                avg = mx.mean(mx.array(ep_losses)).item()
+                progress.set_postfix({'MSE': f'{avg:.4f}'})
+        avg = mx.mean(mx.array(ep_losses)).item() if ep_losses else 0.0
+        print(f"TPSA→z Epoch {ep+1}: MSE={avg:.4f}")
+
+    # Save updated weights
+    os.makedirs(args.checkpoint_dir, exist_ok=True)
+    model.save_weights(best_path)
+    print(f"Saved model with trained TPSA→z predictor to {best_path}")
+
+
+if __name__ == '__main__':
+    main()
+
+

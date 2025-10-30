@@ -20,21 +20,9 @@ sf.set_semantic_constraints(constraints)
 output_path = 'mlx_data/chembl_cns_selfies.json'
 output_npy = 'mlx_data/chembl_cns_tokenized.npy'
 
-# Initialize output data structure
-if not os.path.exists(output_path):
-    output_data = []
-    existing_smiles = set()
-else:
-    with open(output_path, 'r') as f:
-        data = json.load(f)
-        # Handle both list and dict formats
-        if isinstance(data, list):
-            output_data = data
-        else:
-            output_data = data.get('molecules', [])
-        # Create a set of existing SMILES to avoid duplicates
-        existing_smiles = set(mol['smiles'] for mol in output_data)
-        print(f"Found {len(existing_smiles)} existing molecules")
+# Fresh start: initialize empty accumulator (wipe any prior state)
+output_data = []
+existing_smiles = set()
 
 def smiles_to_selfies(smiles_str):
     try:
@@ -72,17 +60,15 @@ try:
         molecule_type='Small molecule',
         cns_flag=1
     )
-    
     print(f"Fetching CNS molecules from ChEMBL...")
-    
 except Exception as e:
     print(f"Error querying ChEMBL: {e}")
     results = []
 
 # Process molecules - no LogP filter
 print("Processing CNS molecules...")
-target_count = 15000  # Target: 15k molecules total
-processed = len(output_data)  # Start from existing count
+target_count = 20000
+processed = len(output_data)
 skipped = 0
 
 print(f"Starting from {processed} molecules already collected")
@@ -116,16 +102,14 @@ for i, record in enumerate(tqdm.tqdm(results, desc="Processing molecules")):
             skipped += 1
             continue
         
-        # Append to output data
+        # Append to output data (store only SELFIES and TPSA)
         molecule_entry = {
-            'smiles': smiles,
             'selfies': selfies,
             'tpsa': tpsa
         }
         output_data.append(molecule_entry)
-        existing_smiles.add(smiles)  # Track as seen
+        existing_smiles.add(smiles)  # Track as seen to avoid duplicates
         processed += 1
-        
         # Write to JSON immediately every molecule
         save_intermediate()
         
@@ -140,7 +124,7 @@ if processed == 0:
     print("No molecules found matching criteria.")
     exit(1)
 
-# Final processing: build vocab and tokenize
+# Final processing: build vocab, tokenize, and compute normalization stats
 print("\nBuilding vocabulary and tokenizing...")
 
 def get_selfies_vocab(molecules):
@@ -188,8 +172,9 @@ for mol in output_data:
 tokenized_data = np.array(tokenized_data, dtype=np.int32)
 
 # Final save with all metadata
-logp_values = [mol['logp'] for mol in output_data]
 tpsa_values = [mol['tpsa'] for mol in output_data]
+tpsa_mean = float(np.mean(tpsa_values)) if tpsa_values else 0.0
+tpsa_std = float(np.std(tpsa_values)) if tpsa_values else 1.0
 
 final_output = {
     'tokenized_sequences': tokenized_data.tolist(),
@@ -197,7 +182,9 @@ final_output = {
     'idx_to_token': idx_to_token,
     'vocab_size': len(token_to_idx),
     'max_length': max_len,
-    'molecules': output_data
+    'molecules': output_data,
+    'tpsa_mean': tpsa_mean,
+    'tpsa_std': tpsa_std
 }
 
 with open(output_path, 'w') as f:
@@ -206,7 +193,4 @@ with open(output_path, 'w') as f:
 np.save(output_npy, tokenized_data)
 
 print(f"\n Saved {len(output_data)} ChEMBL CNS molecules to {output_path}")
-if logp_values:
-    print(f"   Average LogP: {np.mean(logp_values):.2f}")
-    print(f"   LogP range: {min(logp_values):.2f} - {max(logp_values):.2f}")
-    print(f"   Average TPSA: {np.mean(tpsa_values):.2f}")
+print(f"   Average TPSA: {np.mean(tpsa_values):.2f}")

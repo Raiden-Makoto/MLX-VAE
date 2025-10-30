@@ -13,7 +13,7 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import pandas as pd
 
-from utils.sample import load_best_model, sample_from_vae, tokens_to_selfies, generate_conditional_molecules, analyze_logp_tpsa_accuracy
+from utils.sample import load_best_model, sample_from_vae, tokens_to_selfies, analyze_logp_tpsa_accuracy
 from utils.validate import batch_validate_selfies
 from utils.visualize import create_molecule_grid, create_property_distributions
 from utils.diversity import calculate_diversity
@@ -145,7 +145,7 @@ def main():
     parser = argparse.ArgumentParser(description='Generate and analyze molecules with VAE')
     parser.add_argument('--num_samples', type=int, default=128, 
                        help='Number of molecules to generate (default 128)')
-    parser.add_argument('--temperature', type=float, default=1.0,
+    parser.add_argument('--temperature', type=float, default=0.7,
                        help='Sampling temperature')
     parser.add_argument('--top_k', type=int, default=10,
                        help='Top-k sampling threshold')
@@ -212,6 +212,7 @@ def main():
         # CONDITIONAL GENERATION (DEFAULT)
         print(" CONDITIONAL MOLECULAR GENERATION")
         print("="*50)
+        print(f"Target LogP: {args.logp}")
         print(f"Target TPSA: {args.tpsa}")
         print(f"Number of samples: {args.num_samples}")
         print(f"Temperature: {args.temperature}")
@@ -224,12 +225,23 @@ def main():
         print(" Model loaded successfully!")
         print()
         
-        # Generate conditional molecules with both LogP and TPSA
-        molecules = generate_conditional_molecules(
-            model, args.logp, args.tpsa, args.num_samples, 
-            args.temperature, args.top_k
+        # Generate conditional molecules using inverse mapping (TPSA -> z)
+        print(" Using inverse mapping (TPSA -> z) for conditional generation...")
+        seqs = model.generate_conditional_inverse(
+            target_logp=args.logp,
+            target_tpsa=args.tpsa,
+            num_samples=args.num_samples,
+            temperature=args.temperature,
+            top_k=args.top_k
         )
         
+        # Convert to SELFIES and validate
+        selfies_list = tokens_to_selfies(seqs)
+        from utils.validate import batch_validate_selfies
+        results = batch_validate_selfies(selfies_list, verbose=False)
+        
+        # Filter valid molecules (results already contain RDKit properties)
+        molecules = [r for r in results if r]
         if not molecules:
             print(" No valid molecules generated!")
             return

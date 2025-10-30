@@ -1,7 +1,7 @@
 import mlx.core as mx
 import mlx.nn as nn
 
-from .layers import PositionalEncoding, TransformerEncoderLayer, FILM
+from .layers import PositionalEncoding, TransformerEncoderLayer
 
 class SelfiesTransformerEncoder(nn.Module):
     """Transformer encoder for SELFIES sequences"""
@@ -30,26 +30,19 @@ class SelfiesTransformerEncoder(nn.Module):
             for _ in range(num_layers)
         ]
         
-        # Property conditioning now via concatenation with input, not FILM
-        self.film_layers = []
-        
         # Output projection to latent space
         self.mu_projection = nn.Linear(embedding_dim, latent_dim)
         self.logvar_projection = nn.Linear(embedding_dim, latent_dim)
         
         # Masked pooling for sequence-level representation
         self.dropout = nn.Dropout(dropout)
-        
+    
     def masked_pool(self, x, mask):
-        """Pool sequence with attention mask - improved attention-based pooling"""
         # x: [B, T, D], mask: [B, T]
         mask_expanded = mx.expand_dims(mask, axis=-1)  # [B, T, 1]
-        # Compute attention scores from final hidden states
-        attention_scores = mx.sum(mx.tanh(x) * mask_expanded, axis=-1, keepdims=True)  # [B, T, 1]
-        attention_weights = mx.softmax(attention_scores, axis=1)  # [B, T, 1]
-        # Weighted average pooling
-        masked_x = x * mask_expanded * attention_weights
-        return mx.sum(masked_x, axis=1)
+        masked_x = x * mask_expanded  # zero out padded positions
+        denom = mx.maximum(mx.sum(mask_expanded, axis=1), 1e-6)
+        return mx.sum(masked_x, axis=1) / denom
         
     def __call__(self, x, property_embedding=None):
         # x: [B, T] - input token sequences
@@ -63,6 +56,11 @@ class SelfiesTransformerEncoder(nn.Module):
         # Token embedding + positional encoding
         embedded = self.token_embedding(x)  # [B, T, embedding_dim]
         embedded = self.positional_encoding(embedded)
+        
+        # Add property embedding as a global bias if provided
+        if property_embedding is not None:
+            prop = mx.expand_dims(property_embedding, axis=1)  # [B, 1, D]
+            embedded = embedded + prop
         
         embedded = self.dropout(embedded)
         
