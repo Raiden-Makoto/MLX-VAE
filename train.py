@@ -31,6 +31,8 @@ parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (epochs without improvement)')
 parser.add_argument('--val_freq', type=int, default=5, help='Validate every N epochs')
+parser.add_argument('--tpsa_bins', type=int, default=5, help='Number of TPSA bins for stratified sampling')
+parser.add_argument('--per_bin', type=int, default=2000, help='Samples per TPSA bin (with replacement if needed)')
  # Predictor training moved to train_predictor.py to keep this file focused
 
 # Load data and metadata
@@ -64,9 +66,35 @@ args = parser.parse_args()
 args.num_layers = 4
 args.num_heads = 4
 
-# Prepare data
-tokenized_mx = mx.array(tokenized)
-properties_mx = mx.array(properties)
+# Prepare data with TPSA stratified sampling (always on)
+BINS = max(1, int(args.tpsa_bins))
+PER_BIN = max(1, int(args.per_bin))
+# Build bins on raw TPSA (un-normalized)
+tpsa_vals = properties_raw[:, 1]
+bin_edges = np.linspace(tpsa_vals.min(), tpsa_vals.max(), BINS + 1)
+# bin ids in [0..BINS-1]
+bin_ids = np.digitize(tpsa_vals, bin_edges[1:-1], right=False)
+balanced_indices = []
+rng = np.random.default_rng(42)
+for b in range(BINS):
+    bin_idx = np.where(bin_ids == b)[0]
+    if bin_idx.size == 0:
+        continue
+    replace = bin_idx.size < PER_BIN
+    take = rng.choice(bin_idx, size=PER_BIN, replace=replace)
+    balanced_indices.append(take)
+if balanced_indices:
+    balanced_indices = np.concatenate(balanced_indices, axis=0)
+    tokenized_sel = tokenized[balanced_indices]
+    properties_sel = properties[balanced_indices]
+    print(f"TPSA stratified sampling: bins={BINS}, per_bin={PER_BIN}, total={len(balanced_indices)}")
+else:
+    tokenized_sel = tokenized
+    properties_sel = properties
+    print("TPSA stratified sampling found no bins; using full dataset")
+
+tokenized_mx = mx.array(tokenized_sel)
+properties_mx = mx.array(properties_sel)
 
 # Shuffle
 n_samples = tokenized_mx.shape[0]
