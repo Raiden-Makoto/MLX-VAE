@@ -368,6 +368,15 @@ for epoch in range(start_epoch, total_epochs):
     final_loss = mx.mean(mx.array(epoch_losses)).item()
     final_recon = mx.mean(mx.array(epoch_recon)).item()
     final_kl = mx.mean(mx.array(epoch_kl)).item()
+    # Run validation on the held-out split
+    val_total, val_recon, val_kl, val_div, val_prop = validate(
+        model,
+        val_batches,
+        beta,
+        noise_std=args.latent_noise_std,
+        diversity_weight=args.diversity_weight,
+        property_weight=0.0,
+    )
     
     if USE_REINFORCE:
         final_policy = mx.mean(mx.array(epoch_policy)).item() if epoch_policy else 0.0
@@ -375,12 +384,15 @@ for epoch in range(start_epoch, total_epochs):
         final_valid = mx.mean(mx.array(epoch_valid)).item() if epoch_valid else 0.0
         final_aux = mx.mean(mx.array(epoch_aux)).item() if epoch_aux else 0.0
         print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Policy={final_policy:.4f} Reward={final_reward:.2f} Valid={final_valid*100:.1f}% Aux={final_aux:.4f} Total={final_loss:.4f}")
+        print(f"Val: Total={val_total:.4f} Recon={val_recon:.4f} KL={val_kl:.4f} Div={val_div:.4f}")
     else:
         final_prop = mx.mean(mx.array(epoch_prop)).item() if epoch_prop else 0.0
         print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Prop={final_prop:.4f} Total={final_loss:.4f}")
+        print(f"Val: Total={val_total:.4f} Recon={val_recon:.4f} KL={val_kl:.4f} Div={val_div:.4f} Prop={val_prop:.4f}")
     # Save best
-    if final_loss < best_loss:
-        best_loss = final_loss
+    # Track best by validation total loss
+    if val_total < best_loss:
+        best_loss = val_total
         model.save_weights(best_model_path)
         norm_stats = {
             'logp_mean': float(logp_mean), 'logp_std': float(logp_std),
@@ -390,7 +402,7 @@ for epoch in range(start_epoch, total_epochs):
         }
         with open(f'{OUTPUT_DIR}/property_norm.json', 'w') as f:
             json.dump(norm_stats, f)
-        print(f"New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
+        print(f"New best model! Val Loss: {val_total:.4f} -> Saved to {best_model_path}")
     print("="*67)
     with open(os.path.join(OUTPUT_DIR, 'last_epoch.txt'), 'w') as f:
         f.write(str(epoch))
