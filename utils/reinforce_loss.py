@@ -142,30 +142,44 @@ def compute_reinforce_loss(
         temperature=temperature, top_k=top_k, use_sampling=use_sampling
     )
     
-    # 2. Compute reward: negative absolute error (we want to minimize error)
-    # Convert to numpy for easier computation
-    pred_np = np.array(pred_tpsa)
-    target_np = np.array(target_tpsa) if isinstance(target_tpsa, mx.array) else target_tpsa
-    valid_np = np.array(valid_mask) if isinstance(valid_mask, mx.array) else valid_mask
+    # 2. Compute reward: reward progress toward target (smoother reward signal)
+    # Convert to MLX arrays for computation
+    pred_mx = pred_tpsa if isinstance(pred_tpsa, mx.array) else mx.array(pred_tpsa)
+    target_mx = target_tpsa if isinstance(target_tpsa, mx.array) else mx.array(target_tpsa)
+    valid_mx = valid_mask if isinstance(valid_mask, mx.array) else mx.array(valid_mask)
     
-    tpsa_error = np.abs(pred_np - target_np)
+    # Compute absolute error
+    tpsa_error = mx.abs(pred_mx - target_mx)
     
-    # Only compute reward for valid molecules
-    reward_arr = np.full(B, -100.0, dtype=np.float32)  # Default penalty for invalid
+    # Initialize reward array with penalty for invalid molecules
+    reward_arr = mx.full((B,), -100.0)
+    
     if tol_band and tol_band > 0:
-        # Normalized smooth reward in [-1, 0]: closer to target -> higher reward
-        shaped = -tpsa_error / float(tol_band)
-        # clip to [-1, 0]
-        shaped = np.clip(shaped, -1.0, 0.0)
-        reward_arr[valid_np] = shaped[valid_np]
+        # Normalized reward: -abs(pred_tpsa - target_tpsa) / tol_band
+        # This gives reward in [-1, 0] range: closer to target -> higher (less negative) reward
+        # Reward any improvement, not just hitting target exactly
+        reward_shaped = -tpsa_error / float(tol_band)
+        
+        # Clip reward to [-1, 0] as specified
+        reward_shaped = mx.clip(reward_shaped, -1.0, 0.0)
+        
+        # Add bonus for being within tolerance band (positive reinforcement for good performance)
+        within_tol = tpsa_error <= tol_band
+        # Bonus makes reward positive when within tolerance
+        reward_shaped = mx.where(within_tol, reward_shaped + 1.0, reward_shaped)
+        
+        # Apply to valid molecules only
+        reward_arr = mx.where(valid_mx, reward_shaped, reward_arr)
     else:
-        reward_arr[valid_np] = -tpsa_error[valid_np]
+        # No tolerance band: simple negative error penalty
+        reward_arr = mx.where(valid_mx, -tpsa_error, reward_arr)
+    
     # Scale reward if requested
     if reward_scale != 1.0:
         reward_arr = reward_arr * float(reward_scale)
     
-    reward = mx.array(reward_arr)
-    valid_mask_mx = mx.array(valid_np.astype(np.float32))
+    reward = reward_arr
+    valid_mask_mx = valid_mx
     
     # 3. Baseline subtraction for variance reduction (optional)
     if baseline is not None:

@@ -33,7 +33,7 @@ parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 parser.add_argument('--property_weight', type=float, default=100.0, help='Weight for property reconstruction loss (predict TPSA from z+FILM)')
 parser.add_argument('--policy_weight_max', type=float, default=10.0, help='Maximum policy weight (curriculum learning)')
-parser.add_argument('--aux_weight', type=float, default=0.5, help='Weight for auxiliary TPSA head MSE (normalized)')
+parser.add_argument('--aux_weight', type=float, default=5.0, help='Weight for auxiliary TPSA head MSE (normalized)')
  # RL sampling and curriculum use fixed defaults in code (no CLI flags)
  # Predictor training moved to train_predictor.py to keep this file focused
 
@@ -279,7 +279,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
     optimizer.update(model, grads)
     return (total_loss, stored['recon'], stored['kl'], stored['diversity'], 
             stored.get('property', 0.0), stored.get('policy', 0.0), 
-            stored.get('reward', 0.0), stored.get('valid_pct', 0.0))
+            stored.get('reward', 0.0), stored.get('valid_pct', 0.0),
+            stored.get('aux', 0.0))
 
 # Validation
 def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01, property_weight=0.0):
@@ -335,14 +336,14 @@ for epoch in range(start_epoch, total_epochs):
     else:
         policy_weight = 0.0
     
-    epoch_losses, epoch_recon, epoch_kl, epoch_prop, epoch_policy, epoch_reward, epoch_valid = [], [], [], [], [], [], []
+    epoch_losses, epoch_recon, epoch_kl, epoch_prop, epoch_policy, epoch_reward, epoch_valid, epoch_aux = [], [], [], [], [], [], [], []
     progress = tqdm.tqdm(train_batches, desc=f"Epoch {epoch+1}/{total_epochs} (β={beta:.3f})", unit="batch", leave=False)
     for batch_idx, (batch_data, batch_properties) in enumerate(progress):
         result = train_step(model, batch_data, batch_properties, optimizer, beta, args.latent_noise_std, 
                            args.diversity_weight, args.property_weight, USE_REINFORCE, reinforce, policy_weight, args.aux_weight)
-        total, recon, kl, div, prop, policy, reward, valid_pct = result
+        total, recon, kl, div, prop, policy, reward, valid_pct, aux = result
         epoch_losses.append(total); epoch_recon.append(recon); epoch_kl.append(kl)
-        epoch_prop.append(prop); epoch_policy.append(policy); epoch_reward.append(reward); epoch_valid.append(valid_pct)
+        epoch_prop.append(prop); epoch_policy.append(policy); epoch_reward.append(reward); epoch_valid.append(valid_pct); epoch_aux.append(aux)
         
         if batch_idx % 10 == 0:
             avg_loss = mx.mean(mx.array(epoch_losses)).item()
@@ -352,9 +353,11 @@ for epoch in range(start_epoch, total_epochs):
                 avg_policy = mx.mean(mx.array(epoch_policy)).item() if epoch_policy else 0.0
                 avg_reward = mx.mean(mx.array(epoch_reward)).item() if epoch_reward else 0.0
                 avg_valid = mx.mean(mx.array(epoch_valid)).item() if epoch_valid else 0.0
+                avg_aux = mx.mean(mx.array(epoch_aux)).item() if epoch_aux else 0.0
                 progress.set_postfix({ 
                     'Loss': f'{avg_loss:.4f}', 'Recon': f'{avg_recon:.4f}', 'KL': f'{avg_kl:.4f}',
-                    'Policy': f'{avg_policy:.4f}', 'Reward': f'{avg_reward:.2f}', 'Valid': f'{avg_valid*100:.1f}%'
+                    'Policy': f'{avg_policy:.4f}', 'Reward': f'{avg_reward:.2f}', 'Valid': f'{avg_valid*100:.1f}%',
+                    'Aux': f'{avg_aux:.4f}'
                 })
             else:
                 avg_prop = mx.mean(mx.array(epoch_prop)).item() if epoch_prop else 0.0
@@ -370,7 +373,8 @@ for epoch in range(start_epoch, total_epochs):
         final_policy = mx.mean(mx.array(epoch_policy)).item() if epoch_policy else 0.0
         final_reward = mx.mean(mx.array(epoch_reward)).item() if epoch_reward else 0.0
         final_valid = mx.mean(mx.array(epoch_valid)).item() if epoch_valid else 0.0
-        print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Policy={final_policy:.4f} Reward={final_reward:.2f} Valid={final_valid*100:.1f}% Total={final_loss:.4f}")
+        final_aux = mx.mean(mx.array(epoch_aux)).item() if epoch_aux else 0.0
+        print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Policy={final_policy:.4f} Reward={final_reward:.2f} Valid={final_valid*100:.1f}% Aux={final_aux:.4f} Total={final_loss:.4f}")
     else:
         final_prop = mx.mean(mx.array(epoch_prop)).item() if epoch_prop else 0.0
         print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Prop={final_prop:.4f} Total={final_loss:.4f}")
