@@ -22,6 +22,9 @@ class FILM(nn.Module):
         gamma = self.gamma_linear(conditions)  # [B, D]
         beta = self.beta_linear(conditions)     # [B, D]
         
+        # Enforce positive gamma to prevent signal inversion (fix for negative gamma bug)
+        gamma = nn.softplus(gamma)  # Always positive: softplus(x) = log(1 + exp(x))
+        
         # Broadcast gamma and beta across sequence length
         # features is [B, T, D], so we expand to [B, 1, D] and broadcast
         gamma = mx.expand_dims(gamma, axis=1)  # [B, 1, D]

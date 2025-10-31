@@ -18,6 +18,8 @@ class SelfiesTransformerVAE(nn.Module):
         dropout: float=0.1,
     ):
         super().__init__()
+        self.hidden_dim = hidden_dim
+        self.embedding_dim = embedding_dim
         self.encoder = SelfiesTransformerEncoder(
             vocab_size, embedding_dim, hidden_dim, latent_dim, 
             num_heads, num_layers, dropout
@@ -58,6 +60,18 @@ class SelfiesTransformerVAE(nn.Module):
             nn.Linear(hidden_dim, 1),
         )
 
+        # Property encoder reconstruction heads (supervise encoders directly)
+        self.tpsa_reconstructor = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+        self.logp_reconstructor = nn.Sequential(
+            nn.Linear(embedding_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
     def set_property_normalization(self, logp_mean, logp_std, tpsa_mean, tpsa_std):
         self.logp_mean = logp_mean
         self.logp_std = logp_std
@@ -90,7 +104,17 @@ class SelfiesTransformerVAE(nn.Module):
                 tpsa_properties = (tpsa_properties - self.tpsa_mean) / self.tpsa_std
             logp_emb = self.property_encoder_logp(logp_properties)
             tpsa_emb = self.property_encoder_tpsa(tpsa_properties)
+            # Concatenate property embeddings to form FILM context
             film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
+            # Optional debug: check if embeddings carry signal
+            try:
+                import os
+                if os.environ.get('FILM_DEBUG', '0') == '1':
+                    lp_std = float(mx.std(logp_emb).item())
+                    tp_std = float(mx.std(tpsa_emb).item())
+                    print(f"EMB_STD {lp_std:.6f} {tp_std:.6f}")
+            except Exception:
+                pass
         # Decode
         logits = self.decoder(z, input_seq, film_embedding)
         # Auxiliary TPSA prediction (normalized) when properties are provided

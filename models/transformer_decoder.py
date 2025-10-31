@@ -79,6 +79,18 @@ class SelfiesTransformerDecoder(nn.Module):
             
             # Apply FILM conditioning if properties provided
             if property_embedding is not None:
+                # Debug: Print per-layer gamma stats (post-softplus to verify fix)
+                try:
+                    import os
+                    if os.environ.get('FILM_DEBUG', '0') == '1':
+                        gamma_raw = self.film_layers[i].gamma_linear(property_embedding)  # [B, D]
+                        gamma_post_softplus = nn.softplus(gamma_raw)  # Post-softplus (always positive)
+                        # Three values: layer_index, gamma_mean_post_softplus, min_gamma (should be > 0)
+                        gamma_mean = float(mx.mean(gamma_post_softplus).item())
+                        gamma_min = float(mx.min(gamma_post_softplus).item())
+                        print(f"L{i} {gamma_mean:.4f} {gamma_min:.4f}")
+                except Exception:
+                    pass
                 decoder_output = self.film_layers[i](decoder_output, property_embedding)
         
         logits = self.output_projection(decoder_output)  # [B, T, vocab_size]

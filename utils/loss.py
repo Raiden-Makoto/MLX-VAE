@@ -13,7 +13,7 @@ def get_pad_token():
             import json
             with open('mlx_data/chembl_cns_selfies.json') as f:
                 meta = json.load(f)
-            _pad_token_cache = meta['token_to_idx']['<PAD>']
+                _pad_token_cache = meta['token_to_idx']['<PAD>']
         except:
             _pad_token_cache = 0  # Default PAD token
     return _pad_token_cache

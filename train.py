@@ -202,6 +202,7 @@ best_model_path = os.path.join(OUTPUT_DIR, 'best_model.npz')
 def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01, 
                property_weight=0.0, use_reinforce=False, reinforce_loss=None, policy_weight=0.0, aux_weight: float=0.0):
     stored = {}
+    PROPERTY_ENCODER_WEIGHT = 10.0
     def loss_fn(model):
         outputs = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
         # Backward compat: handle 3- or 4-tuple returns
@@ -221,6 +222,8 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         stored['kl'] = float(kl.item())
         stored['diversity'] = float(diversity.item())
         stored['aux'] = 0.0
+        stored['logp_recon'] = 0.0
+        stored['tpsa_recon'] = 0.0
         
         # REINFORCE policy gradient loss (if enabled)
         if use_reinforce and reinforce_loss is not None:
@@ -273,6 +276,38 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             aux_mse = mx.mean((aux_pred - target_norm) ** 2)
             stored['aux'] = float(aux_mse.item())
             total = total + aux_weight * aux_mse
+
+        # Direct supervision for property encoders (reconstruct normalized properties from embeddings)
+        if batch_properties is not None and batch_properties.shape[1] >= 2:
+            # Prepare normalized targets
+            logp_target = batch_properties[:, 0:1]
+            tpsa_target = batch_properties[:, 1:2]
+            lp_mean = model.logp_mean if model.logp_mean is not None else 0.0
+            lp_std = model.logp_std if model.logp_std is not None and model.logp_std != 0 else 1.0
+            tp_mean = model.tpsa_mean if model.tpsa_mean is not None else 0.0
+            tp_std = model.tpsa_std if model.tpsa_std is not None and model.tpsa_std != 0 else 1.0
+            logp_norm = (logp_target - lp_mean) / lp_std
+            tpsa_norm = (tpsa_target - tp_mean) / tp_std
+
+            # Compute embeddings (ensure gradients flow)
+            if isinstance(logp_norm, mx.array):
+                lp_in = logp_norm
+                tp_in = tpsa_norm
+            else:
+                lp_in = mx.array(logp_norm)
+                tp_in = mx.array(tpsa_norm)
+            logp_emb = model.property_encoder_logp(lp_in)
+            tpsa_emb = model.property_encoder_tpsa(tp_in)
+
+            # Reconstruct normalized properties from embeddings
+            logp_pred = model.logp_reconstructor(logp_emb)
+            tpsa_pred = model.tpsa_reconstructor(tpsa_emb)
+            logp_rec_loss = mx.mean((logp_pred - lp_in) ** 2)
+            tpsa_rec_loss = mx.mean((tpsa_pred - tp_in) ** 2)
+            enc_rec = logp_rec_loss + tpsa_rec_loss
+            stored['logp_recon'] = float(logp_rec_loss.item())
+            stored['tpsa_recon'] = float(tpsa_rec_loss.item())
+            total = total + PROPERTY_ENCODER_WEIGHT * enc_rec
         
         return total
     total_loss, grads = mx.value_and_grad(loss_fn)(model)
