@@ -7,7 +7,7 @@ A cutting-edge Variational Autoencoder (VAE) for molecular generation using SELF
 This project implements a sophisticated VAE that learns to generate novel molecular structures by:
 - **Encoding** SELFIES sequences into a continuous latent space
 - **Decoding** latent representations back into valid SELFIES molecules
-- **Generating** chemically valid molecules with **precise LogP and TPSA control**
+- **Generating** chemically valid molecules with **TPSA-targeted control** via FiLM and inverse mapping (TPSA→z)
 - **Filtering** molecules for stability, synthetic accessibility, and conformational strain
 - **FiLM-Conditioned Generation**: Advanced feature-wise linear modulation for sophisticated property control
 
@@ -24,8 +24,8 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 
 ### FiLM-Conditioned Generation (DEFAULT)
 - **Feature-wise Linear Modulation**: Advanced conditioning using γ (scaling) and β (shifting) parameters
-- **Property-Guided Sampling**: Generate molecules targeting specific LogP and TPSA values
-- **Default Targets**: LogP=1.0, TPSA=40.0 (drug-like properties)
+- **Property-Guided Sampling**: Generate molecules targeting TPSA (primary) and optionally LogP
+- **Default Targets**: TPSA default can be set to dataset median/mode
 - **Sophisticated Control**: Each latent dimension gets property-specific transformations
 - **Accuracy Analysis**: Real-time evaluation of how well generated molecules match targets
 - **Flexible Targeting**: Customize LogP and TPSA values for specific applications
@@ -37,7 +37,9 @@ This project implements a sophisticated VAE that learns to generate novel molecu
 - **Information Regularization**: Encourages diverse latent representations
 - **Diversity Loss**: Promotes molecular diversity in generated samples
 - **Dropout Regularization**: Prevents overfitting with configurable dropout rates
-- **FiLM-Conditioned Training**: Dataset includes LogP and TPSA values for sophisticated property learning
+- **FiLM-Conditioned Training**: Properties fed to decoder via FiLM; latent is regularized only by VAE loss
+- **TPSA→z Inverse Mapping**: Separate predictor learns mapping from normalized TPSA to latent z for stronger control
+- **Stratified Sampling (Mandatory)**: Training uses TPSA-binned, equal-per-bin sampling to de-skew the dataset
 
 ### Molecular Validation & Filtering
 - **Chemical Stability Filtering**: Removes peroxides, small rings, and azides
@@ -66,9 +68,9 @@ Input SELFIES → Transformer Encoder → Latent (μ, σ) → Reparameterization
        Stable, Synthesizable, Property-Controlled Molecules
 ```
 
-### Conditional VAE (CVAE) Architecture
+### Conditional Generation Path
 
-The model implements a **Conditional VAE** that learns p(x|c) where c are the molecular properties (LogP, TPSA):
+The model trains a VAE (reconstruction + β·KL). Properties modulate the decoder via FiLM. At inference, TPSA control uses an inverse mapping (TPSA→z) to select latent codes near the target.
 
 $$\mathcal{L}(\theta, \phi) = \mathbb{E}_{q_\phi(z|x,c)}[\log p_\theta(x|z,c)] - \beta \cdot D_{KL}(q_\phi(z|x,c) || p(z|c)) + \lambda_{div} \cdot \mathcal{L}_{div}$$
 
@@ -105,29 +107,29 @@ Where:
 
 ### Data Preparation
 
-Download ChEMBL CNS dataset (10,000+ molecules):
+Download ChEMBL CNS dataset (20,000 molecules, SELFIES + TPSA only) and tokenize:
 ```bash
 python mlx_data/download_chembl_cns.py
 ```
 
 ### Training
 
-**Standard Configuration:**
+**Train VAE (with mandatory TPSA stratification):**
 ```bash
-python train.py --epochs 40 --batch_size 128 --learning_rate 1e-4 \
-                --num_heads 4 --num_layers 4 --dropout 0.1
+python train.py --epochs 50 --batch_size 128 --learning_rate 1e-4 \
+                --num_heads 4 --num_layers 4 --dropout 0.1 \
+                --tpsa_bins 5 --per_bin 2000
 ```
 
-**High-Performance Configuration:**
+**Train TPSA→z Predictor (after VAE):**
 ```bash
-python train.py --epochs 80 --batch_size 64 --learning_rate 5e-5 \
-                --embedding_dim 256 --hidden_dim 512 --num_heads 8 --num_layers 6
+python train_predictor.py --epochs 50 --batch_size 128 --learning_rate 1e-4
 ```
 
-### Conditional Generation & Analysis
+### Conditional Generation & Analysis (TPSA-targeted)
 ```bash
-# Generate molecules with specific LogP and TPSA targets
-python inference.py --num_samples 128 --logp 3.21 --tpsa 72.03
+# Generate molecules with a specific TPSA target (inverse mapping + FiLM)
+python inference.py --num_samples 128 --tpsa 72.0
 
 # Or use default targets (median values from dataset)
 python inference.py

@@ -12,6 +12,14 @@ import argparse
 import tqdm
 import os
 
+# REINFORCE imports
+try:
+    from utils.reinforce_loss import REINFORCELoss
+    REINFORCE_AVAILABLE = True
+except ImportError:
+    REINFORCE_AVAILABLE = False
+    print("Warning: REINFORCE loss not available")
+
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--learning_rate', type=float, default=1e-4)
@@ -32,7 +40,10 @@ parser.add_argument('--resume', action='store_true', help='Resume training from 
 parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (epochs without improvement)')
 parser.add_argument('--val_freq', type=int, default=5, help='Validate every N epochs')
 parser.add_argument('--tpsa_bins', type=int, default=5, help='Number of TPSA bins for stratified sampling')
-parser.add_argument('--per_bin', type=int, default=2000, help='Samples per TPSA bin (with replacement if needed)')
+parser.add_argument('--per_bin', type=int, default=4000, help='Samples per TPSA bin (with replacement if needed); 5×4000=20k')
+parser.add_argument('--property_weight', type=float, default=100.0, help='Weight for property reconstruction loss (predict TPSA from z+FILM)')
+parser.add_argument('--use_reinforce', action='store_true', help='Use REINFORCE policy gradient instead of property loss')
+parser.add_argument('--policy_weight_max', type=float, default=10.0, help='Maximum policy weight (curriculum learning)')
  # Predictor training moved to train_predictor.py to keep this file focused
 
 # Load data and metadata
@@ -45,20 +56,23 @@ idx_to_token = meta['idx_to_token']
 vocab_size = meta['vocab_size']
 max_length = meta['max_length']
 
-# Load properties - compute logp and tpsa from dataset
+# Load properties - TPSA only (dataset stores SELFIES + TPSA)
 molecules = meta['molecules']
-properties_raw = np.array([[mol.get('logp', 3.0), mol.get('tpsa', 82.0)] for mol in molecules], dtype=np.float32)
+properties_raw_tpsa = np.array([mol.get('tpsa', 82.0) for mol in molecules], dtype=np.float32)
 
 # Normalize properties (zero mean, unit variance)
-logp_mean = np.mean(properties_raw[:, 0])
-logp_std = np.std(properties_raw[:, 0])
-tpsa_mean = np.mean(properties_raw[:, 1])
-tpsa_std = np.std(properties_raw[:, 1])
+# LogP placeholder: zero-mean unit-std to avoid impacting conditioning
+logp_mean = 0.0
+logp_std = 1.0
+tpsa_mean = np.mean(properties_raw_tpsa)
+tpsa_std = np.std(properties_raw_tpsa)
 
-properties = np.array([
-    [(prop[0] - logp_mean) / logp_std, (prop[1] - tpsa_mean) / tpsa_std]
-    for prop in properties_raw
-], dtype=np.float32)
+# Store raw properties - model will normalize them internally
+# First column: LogP (placeholder, zeros), Second column: TPSA (raw)
+properties = np.stack([
+    np.zeros_like(properties_raw_tpsa, dtype=np.float32),
+    properties_raw_tpsa.astype(np.float32)
+], axis=1)
 
 args = parser.parse_args()
 
@@ -66,11 +80,34 @@ args = parser.parse_args()
 args.num_layers = 4
 args.num_heads = 4
 
+# Setup REINFORCE if requested
+reinforce = None
+if args.use_reinforce and REINFORCE_AVAILABLE:
+    from selfies import decoder as sf_decoder
+    
+    # Create vocab_to_selfies mapping: token_id (int) -> SELFIES token string
+    vocab_to_selfies = {}
+    for token_idx_str, token_str in idx_to_token.items():
+        vocab_to_selfies[int(token_idx_str)] = token_str
+    
+    # Create selfies_to_smiles function
+    def selfies_to_smiles(selfies_str):
+        try:
+            return sf_decoder(selfies_str)
+        except:
+            return None
+    
+    reinforce = REINFORCELoss(vocab_to_selfies, selfies_to_smiles)
+    print("✅ REINFORCE loss initialized")
+elif args.use_reinforce:
+    print("❌ REINFORCE requested but not available. Falling back to property loss.")
+    args.use_reinforce = False
+
 # Prepare data with TPSA stratified sampling (always on)
 BINS = max(1, int(args.tpsa_bins))
 PER_BIN = max(1, int(args.per_bin))
 # Build bins on raw TPSA (un-normalized)
-tpsa_vals = properties_raw[:, 1]
+tpsa_vals = properties_raw_tpsa
 bin_edges = np.linspace(tpsa_vals.min(), tpsa_vals.max(), BINS + 1)
 # bin ids in [0..BINS-1]
 bin_ids = np.digitize(tpsa_vals, bin_edges[1:-1], right=False)
@@ -159,28 +196,87 @@ best_loss = float('inf')
 best_model_path = os.path.join(args.output_dir, 'best_model.npz')
 
 # Training step
-def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01):
+def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01, 
+               property_weight=0.0, use_reinforce=False, reinforce_loss=None, policy_weight=0.0):
     stored = {}
     def loss_fn(model):
         logits, mu, logvar = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
-        total, recon, kl, diversity = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
+        
+        # Standard VAE losses
+        total, recon, kl, diversity, prop_loss = compute_loss(
+            batch_data, logits, mu, logvar, beta, diversity_weight,
+            target_tpsa_raw=None, property_weight=0.0  # Disable property loss if using REINFORCE
+        )
+        
         stored['recon'] = float(recon.item())
         stored['kl'] = float(kl.item())
         stored['diversity'] = float(diversity.item())
+        
+        # REINFORCE policy gradient loss (if enabled)
+        if use_reinforce and reinforce_loss is not None:
+            # Extract target TPSA
+            target_tpsa_raw = None
+            if batch_properties is not None and batch_properties.shape[1] >= 2:
+                if isinstance(batch_properties, mx.array):
+                    target_tpsa_raw = np.array(batch_properties[:, 1])  # [B] raw TPSA values
+                else:
+                    target_tpsa_raw = batch_properties[:, 1]  # [B] raw TPSA values
+            
+            if target_tpsa_raw is not None:
+                policy_loss, reward, valid_mask = reinforce_loss(logits, target_tpsa_raw)
+                stored['policy'] = float(policy_loss.item())
+                stored['reward'] = float(mx.mean(reward).item()) if hasattr(mx.mean(reward), 'item') else float(mx.mean(reward))
+                stored['valid_pct'] = float(mx.mean(valid_mask.astype(mx.float32)).item())
+                total = total + policy_weight * policy_loss
+            else:
+                stored['policy'] = 0.0
+                stored['reward'] = 0.0
+                stored['valid_pct'] = 0.0
+            stored['property'] = 0.0  # Not used with REINFORCE
+        else:
+            # Use standard property loss
+            target_tpsa_raw = None
+            if batch_properties is not None and batch_properties.shape[1] >= 2:
+                if isinstance(batch_properties, mx.array):
+                    target_tpsa_raw = np.array(batch_properties[:, 1])
+                else:
+                    target_tpsa_raw = batch_properties[:, 1]
+            _, _, _, _, prop_loss = compute_loss(
+                batch_data, logits, mu, logvar, beta, diversity_weight,
+                target_tpsa_raw=target_tpsa_raw, property_weight=property_weight
+            )
+            stored['property'] = float(prop_loss.item())
+            stored['policy'] = 0.0
+            stored['reward'] = 0.0
+            stored['valid_pct'] = 0.0
+        
         return total
     total_loss, grads = mx.value_and_grad(loss_fn)(model)
     optimizer.update(model, grads)
-    return total_loss, stored['recon'], stored['kl'], stored['diversity']
+    return (total_loss, stored['recon'], stored['kl'], stored['diversity'], 
+            stored.get('property', 0.0), stored.get('policy', 0.0), 
+            stored.get('reward', 0.0), stored.get('valid_pct', 0.0))
 
 # Validation
-def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01):
-    total_val_loss = total_recon = total_kl = total_div = 0.0
+def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01, property_weight=0.0):
+    total_val_loss = total_recon = total_kl = total_div = total_prop = 0.0
     for batch_data, properties in val_batches:
         logits, mu, logvar = model(batch_data, properties=properties, training=False, noise_std=noise_std)
-        total, recon, kl, div = compute_loss(batch_data, logits, mu, logvar, beta, diversity_weight)
+        # Extract raw TPSA target (for actual TPSA computation from decoded molecules)
+        target_tpsa_raw = None
+        if properties is not None and properties.shape[1] >= 2:
+            if isinstance(properties, mx.array):
+                target_tpsa_raw = np.array(properties[:, 1])  # [B] raw TPSA values
+            else:
+                target_tpsa_raw = properties[:, 1]  # [B] raw TPSA values
+        total, recon, kl, div, prop = compute_loss(
+            batch_data, logits, mu, logvar, beta, diversity_weight,
+            target_tpsa_raw=target_tpsa_raw, property_weight=property_weight
+        )
         total_val_loss += total.item(); total_recon += recon.item(); total_kl += kl.item(); total_div += div.item()
+        total_prop += prop.item()
     n = len(val_batches)
-    return total_val_loss/n, total_recon/n, total_kl/n, total_div/n
+    return total_val_loss/n, total_recon/n, total_kl/n, total_div/n, total_prop/n
 
 # Beta schedule
 def get_beta(epoch, total_epochs, warm, max_beta):
@@ -195,24 +291,61 @@ print(f"Training model for {total_epochs} epochs")
 print(f"Batch size: {args.batch_size}, Learning rate: {args.learning_rate}")
 print(f"Beta warmup: {args.beta_warmup_epochs} epochs (quadratic), Max beta: {args.max_beta}")
 print(f"Diversity weight: {args.diversity_weight}")
+if args.use_reinforce:
+    print(f"✅ REINFORCE enabled: Policy weight max={args.policy_weight_max} (curriculum learning)")
+else:
+    print(f"Property weight: {args.property_weight} (forces decoder to respect z+FILM)")
 print("="*67)
 
 for epoch in range(start_epoch, total_epochs):
     beta = get_beta(epoch, args.epochs, args.beta_warmup_epochs, args.max_beta)
-    epoch_losses, epoch_recon, epoch_kl = [], [], []
+    
+    # Curriculum learning for policy weight (ramp up over epochs)
+    if args.use_reinforce:
+        epoch_ratio = epoch / max(total_epochs - 1, 1)
+        policy_weight = min(args.policy_weight_max * epoch_ratio, args.policy_weight_max)
+    else:
+        policy_weight = 0.0
+    
+    epoch_losses, epoch_recon, epoch_kl, epoch_prop, epoch_policy, epoch_reward, epoch_valid = [], [], [], [], [], [], []
     progress = tqdm.tqdm(train_batches, desc=f"Epoch {epoch+1}/{total_epochs} (β={beta:.3f})", unit="batch", leave=False)
     for batch_idx, (batch_data, batch_properties) in enumerate(progress):
-        total, recon, kl, div = train_step(model, batch_data, batch_properties, optimizer, beta, args.latent_noise_std, args.diversity_weight)
+        result = train_step(model, batch_data, batch_properties, optimizer, beta, args.latent_noise_std, 
+                           args.diversity_weight, args.property_weight, args.use_reinforce, reinforce, policy_weight)
+        total, recon, kl, div, prop, policy, reward, valid_pct = result
         epoch_losses.append(total); epoch_recon.append(recon); epoch_kl.append(kl)
+        epoch_prop.append(prop); epoch_policy.append(policy); epoch_reward.append(reward); epoch_valid.append(valid_pct)
+        
         if batch_idx % 10 == 0:
             avg_loss = mx.mean(mx.array(epoch_losses)).item()
             avg_recon = mx.mean(mx.array(epoch_recon)).item()
             avg_kl = mx.mean(mx.array(epoch_kl)).item()
-            progress.set_postfix({ 'Loss': f'{avg_loss:.4f}', 'Recon': f'{avg_recon:.4f}', 'KL': f'{avg_kl:.4f}' })
+            if args.use_reinforce:
+                avg_policy = mx.mean(mx.array(epoch_policy)).item() if epoch_policy else 0.0
+                avg_reward = mx.mean(mx.array(epoch_reward)).item() if epoch_reward else 0.0
+                avg_valid = mx.mean(mx.array(epoch_valid)).item() if epoch_valid else 0.0
+                progress.set_postfix({ 
+                    'Loss': f'{avg_loss:.4f}', 'Recon': f'{avg_recon:.4f}', 'KL': f'{avg_kl:.4f}',
+                    'Policy': f'{avg_policy:.4f}', 'Reward': f'{avg_reward:.2f}', 'Valid': f'{avg_valid*100:.1f}%'
+                })
+            else:
+                avg_prop = mx.mean(mx.array(epoch_prop)).item() if epoch_prop else 0.0
+                progress.set_postfix({ 
+                    'Loss': f'{avg_loss:.4f}', 'Recon': f'{avg_recon:.4f}', 'KL': f'{avg_kl:.4f}', 'Prop': f'{avg_prop:.4f}' 
+                })
+    
     final_loss = mx.mean(mx.array(epoch_losses)).item()
     final_recon = mx.mean(mx.array(epoch_recon)).item()
     final_kl = mx.mean(mx.array(epoch_kl)).item()
-    print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Total={final_loss:.4f}")
+    
+    if args.use_reinforce:
+        final_policy = mx.mean(mx.array(epoch_policy)).item() if epoch_policy else 0.0
+        final_reward = mx.mean(mx.array(epoch_reward)).item() if epoch_reward else 0.0
+        final_valid = mx.mean(mx.array(epoch_valid)).item() if epoch_valid else 0.0
+        print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Policy={final_policy:.4f} Reward={final_reward:.2f} Valid={final_valid*100:.1f}% Total={final_loss:.4f}")
+    else:
+        final_prop = mx.mean(mx.array(epoch_prop)).item() if epoch_prop else 0.0
+        print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Prop={final_prop:.4f} Total={final_loss:.4f}")
     # Save best
     if final_loss < best_loss:
         best_loss = final_loss

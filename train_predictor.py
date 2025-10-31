@@ -76,12 +76,14 @@ def main():
     tokenized_mx = mx.array(tokenized_np)
 
     molecules = meta['molecules']
-    properties_raw = np.array([[mol.get('logp', 3.0), mol.get('tpsa', 82.0)] for mol in molecules], dtype=np.float32)
-    logp_mean = np.mean(properties_raw[:, 0]); logp_std = np.std(properties_raw[:, 0])
-    tpsa_mean = np.mean(properties_raw[:, 1]); tpsa_std = np.std(properties_raw[:, 1])
-    properties = np.array([
-        [(p[0] - logp_mean) / logp_std, (p[1] - tpsa_mean) / tpsa_std] for p in properties_raw
-    ], dtype=np.float32)
+    properties_raw_tpsa = np.array([mol.get('tpsa', 82.0) for mol in molecules], dtype=np.float32)
+    # LogP placeholder stats (no effect on conditioning, avoids div-by-zero)
+    logp_mean = 0.0; logp_std = 1.0
+    tpsa_mean = np.mean(properties_raw_tpsa); tpsa_std = np.std(properties_raw_tpsa)
+    properties = np.stack([
+        np.zeros_like(properties_raw_tpsa, dtype=np.float32),
+        ((properties_raw_tpsa - tpsa_mean) / (tpsa_std if tpsa_std > 0 else 1.0)).astype(np.float32)
+    ], axis=1)
     properties_mx = mx.array(properties)
 
     # Batches
@@ -121,13 +123,11 @@ def main():
             input_seq = batch_data[:, :-1]
             # Define loss over predictor parameters only to avoid optimizer state for full model
             def loss_fn(predictor):
-                # Compute encoder targets with stopped gradients
+                # Compute encoder targets with stopped gradients (use mu, not sampled z)
                 mu, logvar = model.encoder(input_seq)
-                mu = mx.stop_gradient(mu)
-                logvar = mx.stop_gradient(logvar)
-                z_true = mx.stop_gradient(model.reparameterize(mu, logvar))
+                z_target = mx.stop_gradient(mu)
                 z_pred = predictor(tpsa_norm)
-                return mx.mean((z_pred - z_true) ** 2)
+                return mx.mean((z_pred - z_target) ** 2)
             loss, grads = mx.value_and_grad(loss_fn)(model.tpsa_predictor)
             optimizer.update(model.tpsa_predictor, grads)
             ep_losses.append(loss)
