@@ -12,7 +12,30 @@ import numpy as np
 RDLogger.DisableLog('rdApp.*')
 
 
-def compute_tpsa_batch(logits, vocab_to_selfies, selfies_to_smiles):
+def _sample_tokens_from_logits(logits, temperature: float = 1.0, top_k: int = 0):
+    """
+    Stochastically sample token ids from logits with optional temperature and top-k.
+    Returns [B, T] int token ids.
+    """
+    if temperature != 1.0:
+        logits = logits / temperature
+    if top_k and top_k > 0:
+        k = min(top_k, logits.shape[-1])
+        top_vals = mx.sort(logits, axis=-1)[:, :, -k:]
+        kth = top_vals[:, :, :1]
+        logits = mx.where(logits < kth, -1e9, logits)
+    probs = mx.softmax(logits, axis=-1)
+    # Sample per position
+    B, T, V = probs.shape
+    sampled = []
+    for t in range(T):
+        p_t = probs[:, t, :]
+        tok_t = mx.random.categorical(p_t, axis=-1).astype(mx.int32)
+        sampled.append(tok_t)
+    return mx.stack(sampled, axis=1)
+
+
+def compute_tpsa_batch(logits, vocab_to_selfies, selfies_to_smiles, temperature: float = 1.0, top_k: int = 0, use_sampling: bool = True):
     """
     Compute TPSA from logits without argmax (for batch processing)
     
@@ -29,8 +52,11 @@ def compute_tpsa_batch(logits, vocab_to_selfies, selfies_to_smiles):
     tpsa_values = []
     valid_mask = []
     
-    # Argmax decode (only for property computation, not differentiable)
-    token_ids = mx.argmax(logits, axis=-1)  # [B, seq_len]
+    # Decode tokens for property computation (non-differentiable path)
+    if use_sampling:
+        token_ids = _sample_tokens_from_logits(logits, temperature=temperature, top_k=top_k)
+    else:
+        token_ids = mx.argmax(logits, axis=-1)  # greedy
     token_ids_np = np.array(token_ids)  # Convert to numpy for easier processing
     
     for b in range(B):
@@ -86,6 +112,11 @@ def compute_reinforce_loss(
     selfies_to_smiles,
     baseline=None,
     gamma=0.9999,
+    temperature: float = 1.0,
+    top_k: int = 0,
+    use_sampling: bool = True,
+    tol_band: float = 0.0,
+    reward_scale: float = 1.0,
 ):
     """
     Compute REINFORCE policy gradient loss for TPSA targeting
@@ -106,7 +137,10 @@ def compute_reinforce_loss(
     B, seq_len, vocab_size = logits.shape
     
     # 1. Compute properties from generated molecules
-    pred_tpsa, valid_mask = compute_tpsa_batch(logits, vocab_to_selfies, selfies_to_smiles)
+    pred_tpsa, valid_mask = compute_tpsa_batch(
+        logits, vocab_to_selfies, selfies_to_smiles,
+        temperature=temperature, top_k=top_k, use_sampling=use_sampling
+    )
     
     # 2. Compute reward: negative absolute error (we want to minimize error)
     # Convert to numpy for easier computation
@@ -117,8 +151,18 @@ def compute_reinforce_loss(
     tpsa_error = np.abs(pred_np - target_np)
     
     # Only compute reward for valid molecules
-    reward_arr = np.full(B, -100.0, dtype=np.float32)  # Default penalty
-    reward_arr[valid_np] = -tpsa_error[valid_np]  # Negative error = positive reward for good molecules
+    reward_arr = np.full(B, -100.0, dtype=np.float32)  # Default penalty for invalid
+    if tol_band and tol_band > 0:
+        # Normalized smooth reward in [-1, 0]: closer to target -> higher reward
+        shaped = -tpsa_error / float(tol_band)
+        # clip to [-1, 0]
+        shaped = np.clip(shaped, -1.0, 0.0)
+        reward_arr[valid_np] = shaped[valid_np]
+    else:
+        reward_arr[valid_np] = -tpsa_error[valid_np]
+    # Scale reward if requested
+    if reward_scale != 1.0:
+        reward_arr = reward_arr * float(reward_scale)
     
     reward = mx.array(reward_arr)
     valid_mask_mx = mx.array(valid_np.astype(np.float32))
@@ -161,11 +205,16 @@ def compute_reinforce_loss(
 class REINFORCELoss(nn.Module):
     """Module wrapper for REINFORCE loss computation with cached mappings"""
     
-    def __init__(self, vocab_to_selfies, selfies_to_smiles):
+    def __init__(self, vocab_to_selfies, selfies_to_smiles, temperature: float = 1.0, top_k: int = 0, use_sampling: bool = True, tol_band: float = 0.0, reward_scale: float = 1.0):
         super().__init__()
         self.vocab_to_selfies = vocab_to_selfies
         self.selfies_to_smiles = selfies_to_smiles
         self.baseline = None  # Can be trained value function
+        self.temperature = float(temperature)
+        self.top_k = int(top_k)
+        self.use_sampling = bool(use_sampling)
+        self.tol_band = float(tol_band)
+        self.reward_scale = float(reward_scale)
     
     def __call__(self, logits, target_tpsa):
         return compute_reinforce_loss(
@@ -174,6 +223,11 @@ class REINFORCELoss(nn.Module):
             self.vocab_to_selfies,
             self.selfies_to_smiles,
             baseline=self.baseline,
+            temperature=self.temperature,
+            top_k=self.top_k,
+            use_sampling=self.use_sampling,
+            tol_band=self.tol_band,
+            reward_scale=self.reward_scale,
         )
 
 

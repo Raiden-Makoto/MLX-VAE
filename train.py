@@ -23,28 +23,18 @@ except ImportError:
 parser = argparse.ArgumentParser()
 parser.add_argument('--batch_size', type=int, default=128)
 parser.add_argument('--learning_rate', type=float, default=1e-4)
-parser.add_argument('--embedding_dim', type=int, default=128)
-parser.add_argument('--hidden_dim', type=int, default=256)
-parser.add_argument('--latent_dim', type=int, default=256)
 parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to train for')
-parser.add_argument('--save_every', type=int, default=5, help='Save model every N epochs')
-parser.add_argument('--output_dir', type=str, default='checkpoints', help='Directory to save checkpoints')
+ # output dir fixed in code to 'checkpoints'
 parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs to warm up beta from 0 to 1')
 parser.add_argument('--max_beta', type=float, default=1.0, help='Maximum beta value (CVAE best practice: 1.0 for full KL divergence)')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
 parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
-parser.add_argument('--num_heads', type=int, default=4, help='Number of attention heads (FIXED at 4)')
-parser.add_argument('--num_layers', type=int, default=4, help='Number of transformer layers (FIXED at 4)')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
-parser.add_argument('--patience', type=int, default=10, help='Early stopping patience (epochs without improvement)')
-parser.add_argument('--val_freq', type=int, default=5, help='Validate every N epochs')
-parser.add_argument('--tpsa_bins', type=int, default=5, help='Number of TPSA bins for stratified sampling')
-parser.add_argument('--per_bin', type=int, default=4000, help='Samples per TPSA bin (with replacement if needed); 5×4000=20k')
 parser.add_argument('--property_weight', type=float, default=100.0, help='Weight for property reconstruction loss (predict TPSA from z+FILM)')
-parser.add_argument('--use_reinforce', action='store_true', default=True, help='Use REINFORCE policy gradient instead of property loss (default on)')
-parser.add_argument('--no_reinforce', action='store_true', help='Disable REINFORCE and use property loss instead')
 parser.add_argument('--policy_weight_max', type=float, default=10.0, help='Maximum policy weight (curriculum learning)')
+parser.add_argument('--aux_weight', type=float, default=0.5, help='Weight for auxiliary TPSA head MSE (normalized)')
+ # RL sampling and curriculum use fixed defaults in code (no CLI flags)
  # Predictor training moved to train_predictor.py to keep this file focused
 
 # Load data and metadata
@@ -77,17 +67,14 @@ properties = np.stack([
 
 args = parser.parse_args()
 
-# Honor --no_reinforce to disable default REINFORCE
-if getattr(args, 'no_reinforce', False):
-    args.use_reinforce = False
+# Always use REINFORCE
+USE_REINFORCE = True
 
-# ENFORCE 4 LAYERS 4 HEADS - NEVER CHANGE THIS
-args.num_layers = 4
-args.num_heads = 4
+# Model architecture is fixed in code; no CLI for heads/layers
 
-# Setup REINFORCE if requested
+# Setup REINFORCE
 reinforce = None
-if args.use_reinforce and REINFORCE_AVAILABLE:
+if USE_REINFORCE and REINFORCE_AVAILABLE:
     from selfies import decoder as sf_decoder
     
     # Create vocab_to_selfies mapping: token_id (int) -> SELFIES token string
@@ -102,15 +89,24 @@ if args.use_reinforce and REINFORCE_AVAILABLE:
         except:
             return None
     
-    reinforce = REINFORCELoss(vocab_to_selfies, selfies_to_smiles)
+    # Fixed REINFORCE decoding/reward shaping defaults
+    reinforce = REINFORCELoss(
+        vocab_to_selfies,
+        selfies_to_smiles,
+        temperature=1.1,
+        top_k=30,
+        use_sampling=True,
+        tol_band=10.0,
+        reward_scale=1.0,
+    )
     print("✅ REINFORCE loss initialized")
-elif args.use_reinforce:
+elif USE_REINFORCE:
     print("❌ REINFORCE requested but not available. Falling back to property loss.")
-    args.use_reinforce = False
+    USE_REINFORCE = False
 
-# Prepare data with TPSA stratified sampling (always on)
-BINS = max(1, int(args.tpsa_bins))
-PER_BIN = max(1, int(args.per_bin))
+# Prepare data with TPSA stratified sampling (always on); fixed constants
+BINS = 5
+PER_BIN = 4000
 # Build bins on raw TPSA (un-normalized)
 tpsa_vals = properties_raw_tpsa
 bin_edges = np.linspace(tpsa_vals.min(), tpsa_vals.max(), BINS + 1)
@@ -153,39 +149,41 @@ val_batches = batches[train_size:]
 print(f"Total batches: {len(batches)}, Train: {len(train_batches)}, Validation: {len(val_batches)}")
 
 # Initialize model/optimizer
-print(f"Initializing Transformer VAE with embedding_dim={args.embedding_dim}, hidden_dim={args.hidden_dim}, latent_dim={args.latent_dim}")
-print(f"Transformer config: num_heads={args.num_heads}, num_layers={args.num_layers}, dropout={args.dropout}")
+EMBEDDING_DIM = 128
+HIDDEN_DIM = 256
+LATENT_DIM = 256
+print(f"Initializing Transformer VAE with embedding_dim={EMBEDDING_DIM}, hidden_dim={HIDDEN_DIM}, latent_dim={LATENT_DIM}")
+print(f"Transformer config: dropout={args.dropout}")
 
 model = SelfiesTransformerVAE(
     vocab_size=vocab_size,
-    embedding_dim=args.embedding_dim,
-    hidden_dim=args.hidden_dim,
-    latent_dim=args.latent_dim,
-    num_heads=args.num_heads,
-    num_layers=args.num_layers,
+    embedding_dim=EMBEDDING_DIM,
+    hidden_dim=HIDDEN_DIM,
+    latent_dim=LATENT_DIM,
     dropout=args.dropout
 )
 model.set_property_normalization(logp_mean, logp_std, tpsa_mean, tpsa_std)
 optimizer = Adam(learning_rate=args.learning_rate)
 
-# Output dir
-os.makedirs(args.output_dir, exist_ok=True)
+# Output dir (fixed)
+OUTPUT_DIR = 'checkpoints'
+os.makedirs(OUTPUT_DIR, exist_ok=True)
 
 # Resume
 start_epoch = 0
 if args.resume:
     print(f"Resuming training...")
-    last_epoch_file = os.path.join(args.output_dir, 'last_epoch.txt')
+    last_epoch_file = os.path.join(OUTPUT_DIR, 'last_epoch.txt')
     if os.path.exists(last_epoch_file):
         with open(last_epoch_file, 'r') as f:
             last_completed_epoch = int(f.read().strip())
             start_epoch = last_completed_epoch + 1
         print(f"Resuming from epoch {start_epoch} (last completed: {last_completed_epoch})")
-    best_model_path = os.path.join(args.output_dir, 'best_model.npz')
+    best_model_path = os.path.join(OUTPUT_DIR, 'best_model.npz')
     if os.path.exists(best_model_path):
         print(f"Loading best model weights from: {best_model_path}")
         model.load_weights(best_model_path)
-        norm_file = os.path.join(args.output_dir, 'property_norm.json')
+        norm_file = os.path.join(OUTPUT_DIR, 'property_norm.json')
         if os.path.exists(norm_file):
             with open(norm_file, 'r') as f:
                 norm_stats = json.load(f)
@@ -198,14 +196,20 @@ if args.resume:
 
 # Best tracking
 best_loss = float('inf')
-best_model_path = os.path.join(args.output_dir, 'best_model.npz')
+best_model_path = os.path.join(OUTPUT_DIR, 'best_model.npz')
 
 # Training step
 def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0.05, diversity_weight=0.01, 
-               property_weight=0.0, use_reinforce=False, reinforce_loss=None, policy_weight=0.0):
+               property_weight=0.0, use_reinforce=False, reinforce_loss=None, policy_weight=0.0, aux_weight: float=0.0):
     stored = {}
     def loss_fn(model):
-        logits, mu, logvar = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
+        outputs = model(batch_data, properties=batch_properties, training=True, noise_std=noise_std)
+        # Backward compat: handle 3- or 4-tuple returns
+        if len(outputs) == 4:
+            logits, mu, logvar, aux_pred = outputs
+        else:
+            logits, mu, logvar = outputs
+            aux_pred = None
         
         # Standard VAE losses
         total, recon, kl, diversity, prop_loss = compute_loss(
@@ -216,6 +220,7 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
         stored['recon'] = float(recon.item())
         stored['kl'] = float(kl.item())
         stored['diversity'] = float(diversity.item())
+        stored['aux'] = 0.0
         
         # REINFORCE policy gradient loss (if enabled)
         if use_reinforce and reinforce_loss is not None:
@@ -255,6 +260,20 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
             stored['reward'] = 0.0
             stored['valid_pct'] = 0.0
         
+        # Auxiliary normalized TPSA MSE from aux head (hybrid signal)
+        if aux_weight > 0.0 and aux_pred is not None and batch_properties is not None and batch_properties.shape[1] >= 2:
+            if isinstance(batch_properties, mx.array):
+                target_raw = np.array(batch_properties[:, 1:2])
+            else:
+                target_raw = batch_properties[:, 1:2]
+            # Normalize to match model conditioning
+            t_mean = model.tpsa_mean if model.tpsa_mean is not None else 0.0
+            t_std = model.tpsa_std if model.tpsa_std is not None and model.tpsa_std != 0 else 1.0
+            target_norm = (mx.array(target_raw) - t_mean) / t_std
+            aux_mse = mx.mean((aux_pred - target_norm) ** 2)
+            stored['aux'] = float(aux_mse.item())
+            total = total + aux_weight * aux_mse
+        
         return total
     total_loss, grads = mx.value_and_grad(loss_fn)(model)
     optimizer.update(model, grads)
@@ -266,7 +285,11 @@ def train_step(model, batch_data, batch_properties, optimizer, beta, noise_std=0
 def validate(model, val_batches, beta, noise_std=0.05, diversity_weight=0.01, property_weight=0.0):
     total_val_loss = total_recon = total_kl = total_div = total_prop = 0.0
     for batch_data, properties in val_batches:
-        logits, mu, logvar = model(batch_data, properties=properties, training=False, noise_std=noise_std)
+        outputs = model(batch_data, properties=properties, training=False, noise_std=noise_std)
+        if len(outputs) == 4:
+            logits, mu, logvar, _ = outputs
+        else:
+            logits, mu, logvar = outputs
         # Extract raw TPSA target (for actual TPSA computation from decoded molecules)
         target_tpsa_raw = None
         if properties is not None and properties.shape[1] >= 2:
@@ -296,7 +319,7 @@ print(f"Training model for {total_epochs} epochs")
 print(f"Batch size: {args.batch_size}, Learning rate: {args.learning_rate}")
 print(f"Beta warmup: {args.beta_warmup_epochs} epochs (quadratic), Max beta: {args.max_beta}")
 print(f"Diversity weight: {args.diversity_weight}")
-if args.use_reinforce:
+if USE_REINFORCE:
     print(f"✅ REINFORCE enabled: Policy weight max={args.policy_weight_max} (curriculum learning)")
 else:
     print(f"Property weight: {args.property_weight} (forces decoder to respect z+FILM)")
@@ -306,7 +329,7 @@ for epoch in range(start_epoch, total_epochs):
     beta = get_beta(epoch, args.epochs, args.beta_warmup_epochs, args.max_beta)
     
     # Curriculum learning for policy weight (ramp up over epochs)
-    if args.use_reinforce:
+    if USE_REINFORCE:
         epoch_ratio = epoch / max(total_epochs - 1, 1)
         policy_weight = min(args.policy_weight_max * epoch_ratio, args.policy_weight_max)
     else:
@@ -316,7 +339,7 @@ for epoch in range(start_epoch, total_epochs):
     progress = tqdm.tqdm(train_batches, desc=f"Epoch {epoch+1}/{total_epochs} (β={beta:.3f})", unit="batch", leave=False)
     for batch_idx, (batch_data, batch_properties) in enumerate(progress):
         result = train_step(model, batch_data, batch_properties, optimizer, beta, args.latent_noise_std, 
-                           args.diversity_weight, args.property_weight, args.use_reinforce, reinforce, policy_weight)
+                           args.diversity_weight, args.property_weight, USE_REINFORCE, reinforce, policy_weight, args.aux_weight)
         total, recon, kl, div, prop, policy, reward, valid_pct = result
         epoch_losses.append(total); epoch_recon.append(recon); epoch_kl.append(kl)
         epoch_prop.append(prop); epoch_policy.append(policy); epoch_reward.append(reward); epoch_valid.append(valid_pct)
@@ -325,7 +348,7 @@ for epoch in range(start_epoch, total_epochs):
             avg_loss = mx.mean(mx.array(epoch_losses)).item()
             avg_recon = mx.mean(mx.array(epoch_recon)).item()
             avg_kl = mx.mean(mx.array(epoch_kl)).item()
-            if args.use_reinforce:
+            if USE_REINFORCE:
                 avg_policy = mx.mean(mx.array(epoch_policy)).item() if epoch_policy else 0.0
                 avg_reward = mx.mean(mx.array(epoch_reward)).item() if epoch_reward else 0.0
                 avg_valid = mx.mean(mx.array(epoch_valid)).item() if epoch_valid else 0.0
@@ -343,7 +366,7 @@ for epoch in range(start_epoch, total_epochs):
     final_recon = mx.mean(mx.array(epoch_recon)).item()
     final_kl = mx.mean(mx.array(epoch_kl)).item()
     
-    if args.use_reinforce:
+    if USE_REINFORCE:
         final_policy = mx.mean(mx.array(epoch_policy)).item() if epoch_policy else 0.0
         final_reward = mx.mean(mx.array(epoch_reward)).item() if epoch_reward else 0.0
         final_valid = mx.mean(mx.array(epoch_valid)).item() if epoch_valid else 0.0
@@ -358,19 +381,14 @@ for epoch in range(start_epoch, total_epochs):
         norm_stats = {
             'logp_mean': float(logp_mean), 'logp_std': float(logp_std),
             'tpsa_mean': float(tpsa_mean), 'tpsa_std': float(tpsa_std),
-            'embedding_dim': args.embedding_dim, 'hidden_dim': args.hidden_dim,
-            'latent_dim': args.latent_dim, 'num_heads': args.num_heads,
-            'num_layers': args.num_layers, 'dropout': args.dropout
+            'embedding_dim': EMBEDDING_DIM, 'hidden_dim': HIDDEN_DIM,
+            'latent_dim': LATENT_DIM, 'dropout': args.dropout
         }
-        with open(f'{args.output_dir}/property_norm.json', 'w') as f:
+        with open(f'{OUTPUT_DIR}/property_norm.json', 'w') as f:
             json.dump(norm_stats, f)
         print(f"New best model! Loss: {final_loss:.4f} -> Saved to {best_model_path}")
     print("="*67)
-    if (epoch + 1) % args.save_every == 0:
-        ckpt = os.path.join(args.output_dir, f'checkpoint_epoch_{epoch+1}.npz')
-        model.save_weights(ckpt)
-        print(f"Saved checkpoint: {ckpt}")
-    with open(os.path.join(args.output_dir, 'last_epoch.txt'), 'w') as f:
+    with open(os.path.join(OUTPUT_DIR, 'last_epoch.txt'), 'w') as f:
         f.write(str(epoch))
 
 print("Training completed!")

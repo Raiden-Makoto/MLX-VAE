@@ -161,8 +161,8 @@ def main():
                        help='Use regular generation instead of conditional')
     parser.add_argument('--logp', type=float, default=3.19,
                        help='Target LogP value for conditional generation (default: 3.19)')
-    parser.add_argument('--tpsa', type=float, default=82.49,
-                       help='Target TPSA value for conditional generation (default: 82.49)')
+    parser.add_argument('--tpsa', type=float, default=None,
+                       help='Target TPSA value for conditional generation (default: dataset median)')
     parser.add_argument('--analyze', action='store_true', default=True,
                        help='Analyze conditional generation accuracy (default: True)')
     
@@ -170,6 +170,21 @@ def main():
     
     # Ensure output directory exists
     os.makedirs('output', exist_ok=True)
+    
+    # If TPSA not specified, use dataset median TPSA
+    if args.tpsa is None:
+        try:
+            with open('mlx_data/chembl_cns_selfies.json', 'r') as f:
+                _meta = json.load(f)
+            _mols = _meta.get('molecules', [])
+            _tpsa_vals = [m.get('tpsa', 0.0) for m in _mols if isinstance(m, dict) and 'tpsa' in m]
+            if _tpsa_vals:
+                import numpy as _np
+                args.tpsa = float(_np.median(_tpsa_vals))
+            else:
+                args.tpsa = 80.0
+        except Exception:
+            args.tpsa = 80.0
     
     # Check if regular generation is requested (conditional is DEFAULT)
     if args.regular:

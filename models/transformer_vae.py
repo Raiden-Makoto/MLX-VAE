@@ -49,6 +49,15 @@ class SelfiesTransformerVAE(nn.Module):
         self.tpsa_mean = None
         self.tpsa_std = None
 
+        # Auxiliary property head: predict TPSA from [z || FILM]
+        self.aux_property_head = nn.Sequential(
+            nn.Linear(latent_dim + 2 * embedding_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, 1),
+        )
+
     def set_property_normalization(self, logp_mean, logp_std, tpsa_mean, tpsa_std):
         self.logp_mean = logp_mean
         self.logp_std = logp_std
@@ -84,8 +93,13 @@ class SelfiesTransformerVAE(nn.Module):
             film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
         # Decode
         logits = self.decoder(z, input_seq, film_embedding)
-        # Return standard VAE outputs
-        return logits, mu, logvar
+        # Auxiliary TPSA prediction (normalized) when properties are provided
+        aux_tpsa_pred = None
+        if film_embedding is not None:
+            z_film = mx.concatenate([z, film_embedding], axis=-1)
+            aux_tpsa_pred = self.aux_property_head(z_film)
+        # Return VAE outputs + optional aux prediction
+        return logits, mu, logvar, aux_tpsa_pred
 
     def generate_conditional(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
         """Generate molecules with properties via FILM-only conditioning; z ~ N(0,I)."""

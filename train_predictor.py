@@ -57,6 +57,7 @@ def main():
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--learning_rate', type=float, default=1e-4)
     parser.add_argument('--epochs', type=int, default=50)
+    parser.add_argument('--patience', type=int, default=5)
     parser.add_argument('--checkpoint_dir', type=str, default='checkpoints')
     parser.add_argument('--embedding_dim', type=int, default=128)
     parser.add_argument('--hidden_dim', type=int, default=256)
@@ -114,7 +115,9 @@ def main():
     disable_all_dropout(model)
     optimizer = Adam(learning_rate=args.learning_rate)
 
-    # Train predictor only (stop gradients through encoder)
+    # Train predictor only (stop gradients through encoder) with early stopping on epoch-average MSE
+    best_mse = float('inf')
+    no_improve = 0
     for ep in range(args.epochs):
         ep_losses = []
         progress = tqdm.tqdm(batches, desc=f"TPSA→z Epoch {ep+1}/{args.epochs}", unit="batch", leave=False)
@@ -136,11 +139,30 @@ def main():
                 progress.set_postfix({'MSE': f'{avg:.4f}'})
         avg = mx.mean(mx.array(ep_losses)).item() if ep_losses else 0.0
         print(f"TPSA→z Epoch {ep+1}: MSE={avg:.4f}")
+        # Emit a plain ASCII parse-friendly line for orchestrators
+        print(f"PRED_MSE={avg:.6f}")
+        # Early stopping check
+        if avg + 1e-8 < best_mse:
+            best_mse = avg
+            no_improve = 0
+            # Save best immediately
+            os.makedirs(args.checkpoint_dir, exist_ok=True)
+            best_path = os.path.join(args.checkpoint_dir, 'best_model.npz')
+            model.save_weights(best_path)
+            print(f"New best predictor MSE: {best_mse:.4f} -> saved {best_path}")
+        else:
+            no_improve += 1
+            print(f"No improvement ({no_improve}/{args.patience})")
+            if no_improve >= args.patience:
+                print(f"Early stopping: patience {args.patience} reached. Best MSE={best_mse:.4f}")
+                break
 
-    # Save updated weights
+    # Ensure best weights exist (already saved on improvement); save current if none
     os.makedirs(args.checkpoint_dir, exist_ok=True)
-    model.save_weights(best_path)
-    print(f"Saved model with trained TPSA→z predictor to {best_path}")
+    best_path = os.path.join(args.checkpoint_dir, 'best_model.npz')
+    if not os.path.exists(best_path):
+        model.save_weights(best_path)
+        print(f"Saved model with trained TPSA→z predictor to {best_path}")
 
 
 if __name__ == '__main__':
