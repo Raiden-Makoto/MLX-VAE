@@ -42,7 +42,8 @@ parser.add_argument('--val_freq', type=int, default=5, help='Validate every N ep
 parser.add_argument('--tpsa_bins', type=int, default=5, help='Number of TPSA bins for stratified sampling')
 parser.add_argument('--per_bin', type=int, default=4000, help='Samples per TPSA bin (with replacement if needed); 5×4000=20k')
 parser.add_argument('--property_weight', type=float, default=100.0, help='Weight for property reconstruction loss (predict TPSA from z+FILM)')
-parser.add_argument('--use_reinforce', action='store_true', help='Use REINFORCE policy gradient instead of property loss')
+parser.add_argument('--use_reinforce', action='store_true', default=True, help='Use REINFORCE policy gradient instead of property loss (default on)')
+parser.add_argument('--no_reinforce', action='store_true', help='Disable REINFORCE and use property loss instead')
 parser.add_argument('--policy_weight_max', type=float, default=10.0, help='Maximum policy weight (curriculum learning)')
  # Predictor training moved to train_predictor.py to keep this file focused
 
@@ -75,6 +76,10 @@ properties = np.stack([
 ], axis=1)
 
 args = parser.parse_args()
+
+# Honor --no_reinforce to disable default REINFORCE
+if getattr(args, 'no_reinforce', False):
+    args.use_reinforce = False
 
 # ENFORCE 4 LAYERS 4 HEADS - NEVER CHANGE THIS
 args.num_layers = 4

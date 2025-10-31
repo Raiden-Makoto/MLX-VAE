@@ -5,7 +5,11 @@ import mlx.core as mx
 import mlx.nn as nn
 from rdkit import Chem
 from rdkit.Chem import Descriptors
+from rdkit import RDLogger
 import numpy as np
+
+# Suppress RDKit warnings (stereochemistry conflicts are automatically resolved)
+RDLogger.DisableLog('rdApp.*')
 
 
 def compute_tpsa_batch(logits, vocab_to_selfies, selfies_to_smiles):

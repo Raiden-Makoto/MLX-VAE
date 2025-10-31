@@ -36,6 +36,35 @@ def get_token_mappings():
             _token_mappings_cache = (None, None)
     return _token_mappings_cache
 
+# Cache for TPSA normalization stats (loaded once, reused)
+_tpsa_norm_cache = None
+
+def get_tpsa_normalization():
+    """Lazy load and cache TPSA normalization stats (mean, std)."""
+    global _tpsa_norm_cache
+    if _tpsa_norm_cache is None:
+        try:
+            import json
+            # Try to load from saved file first
+            norm_file = 'checkpoints/property_norm.json'
+            if os.path.exists(norm_file):
+                with open(norm_file, 'r') as f:
+                    norm_stats = json.load(f)
+                _tpsa_norm_cache = (norm_stats.get('tpsa_mean', 82.0), norm_stats.get('tpsa_std', 54.86))
+            else:
+                # Fallback: compute from dataset
+                with open('mlx_data/chembl_cns_selfies.json') as f:
+                    meta = json.load(f)
+                molecules = meta.get('molecules', [])
+                if molecules:
+                    tpsa_values = np.array([mol.get('tpsa', 82.0) for mol in molecules], dtype=np.float32)
+                    _tpsa_norm_cache = (float(np.mean(tpsa_values)), float(np.std(tpsa_values)))
+                else:
+                    _tpsa_norm_cache = (82.0, 54.86)  # Default fallback
+        except:
+            _tpsa_norm_cache = (82.0, 54.86)  # Default fallback
+    return _tpsa_norm_cache
+
 def latent_diversity_loss(z):
     """
     Compute a differentiable diversity penalty on a batch of latent vectors.
@@ -111,6 +140,10 @@ def _compute_tpsa_from_logits(logits, target_tpsa_raw=None):
         from selfies import decoder as sf_decoder
         from rdkit import Chem
         from rdkit.Chem import Descriptors
+        from rdkit import RDLogger
+        
+        # Suppress RDKit warnings (stereochemistry conflicts are automatically resolved)
+        RDLogger.DisableLog('rdApp.*')
         
         # Decode logits to tokens
         decoded_tokens = _decode_logits_to_tokens(logits)  # [B, T-1]
@@ -158,8 +191,20 @@ def _compute_tpsa_from_logits(logits, target_tpsa_raw=None):
         target_tpsa_valid = target_np[valid_indices]  # [N] where N = num valid
         computed_tpsa_arr = np.array(computed_tpsa, dtype=np.float32)  # [N]
         
-        # Compute MSE loss (only on valid samples)
-        mse = np.mean((computed_tpsa_arr - target_tpsa_valid) ** 2)
+        # Normalize TPSA values before computing MSE (same normalization as model uses)
+        tpsa_mean, tpsa_std = get_tpsa_normalization()
+        if tpsa_std > 0:
+            target_norm = (target_tpsa_valid - tpsa_mean) / tpsa_std
+            computed_norm = (computed_tpsa_arr - tpsa_mean) / tpsa_std
+            # Compute MSE loss on normalized values (much smaller scale)
+            mse = np.mean((computed_norm - target_norm) ** 2)
+        else:
+            # Fallback: compute on raw values if std is zero
+            mse = np.mean((computed_tpsa_arr - target_tpsa_valid) ** 2)
+        
+        # Clip property loss to reasonable range to prevent explosion (normalized MSE should be ~0.01-1.0)
+        mse = np.clip(mse, 0.0, 100.0)
+        
         return mx.array(mse), computed_tpsa
         
     except Exception as e:
