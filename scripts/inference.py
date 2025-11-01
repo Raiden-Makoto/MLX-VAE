@@ -4,10 +4,14 @@ Comprehensive molecule generation and analysis pipeline.
 Combines sampling, validation, and visualization into one script.
 """
 
-import argparse
-import json
 import os
 import sys
+
+# Add project root to path (must be before other imports)
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import argparse
+import json
 
 import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
@@ -17,10 +21,6 @@ from utils.sample import load_best_model, sample_from_vae, tokens_to_selfies, an
 from utils.validate import batch_validate_selfies
 from utils.visualize import create_molecule_grid, create_property_distributions
 from utils.diversity import calculate_diversity
-
-
-# Add project root to path
-sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 
 

@@ -1,7 +1,7 @@
 import mlx.core as mx
 import mlx.nn as nn
 
-from .layers import PositionalEncoding, TransformerEncoderLayer, FILM
+from .layers import PositionalEncoding, TransformerEncoderLayer
 
 class SelfiesTransformerDecoder(nn.Module):
     """Transformer decoder using self-attention (not cross-attention)"""
@@ -23,7 +23,7 @@ class SelfiesTransformerDecoder(nn.Module):
         self.token_embedding = nn.Embedding(vocab_size, embedding_dim)
         self.positional_encoding = PositionalEncoding(embedding_dim)
         
-        # Project latent to embedding dimension (z alone, not z+properties)
+        # Project latent to embedding dimension (z contains property information via injection)
         self.latent_projection = nn.Linear(latent_dim, embedding_dim)
         
         # Self-attention layers (not cross-attention!)
@@ -32,17 +32,14 @@ class SelfiesTransformerDecoder(nn.Module):
             for _ in range(num_layers)
         ]
         
-        # FILM layers for property conditioning (as per research doc)
-        # Combined embeddings: logp_emb + tpsa_emb = 2*embedding_dim
-        self.film_layers = [
-            FILM(embedding_dim, 2 * embedding_dim)
-            for _ in range(num_layers)
-        ]
-        
         self.output_projection = nn.Linear(embedding_dim, vocab_size)
         self.dropout = nn.Dropout(dropout)
     
-    def __call__(self, z, input_seq, property_embedding=None):
+    def __call__(self, z, input_seq):
+        """
+        Decode latent z to logits.
+        Properties are now injected directly into z, so no FILM needed!
+        """
         batch_size, seq_len = input_seq.shape
         
         # Create padding mask (1 for valid, 0 for padding)
@@ -62,39 +59,16 @@ class SelfiesTransformerDecoder(nn.Module):
         embedded = self.positional_encoding(embedded)
         
         # Add latent as global context (broadcast to all positions)
+        # z already contains property information via direct injection
         latent_embedding = self.latent_projection(z)  # [B, embedding_dim]
         latent_expanded = mx.expand_dims(latent_embedding, axis=1)  # [B, 1, embedding_dim]
         embedded = embedded + latent_expanded  # [B, T, embedding_dim]
         
-        # Property conditioning is applied via FILM layers only
-        # Skip broadcasting to prevent shape mismatches
-        
         embedded = self.dropout(embedded)
         
-        # Self-attention layers with FILM conditioning
+        # Self-attention layers (pure self-attention, no FILM)
         decoder_output = embedded
-        for i, layer in enumerate(self.decoder_layers):
-            # Apply FILM conditioning BEFORE attention (strong modulation to shape what attention sees)
-            if property_embedding is not None:
-                # Debug: Print per-layer gamma stats (post-sigmoid to verify strengthened scaling)
-                try:
-                    import os
-                    if os.environ.get('FILM_DEBUG', '0') == '1':
-                        gamma_raw = self.film_layers[i].gamma_linear(property_embedding)  # [B, D]
-                        gamma_post_sigmoid = 0.1 + 3.0 * mx.sigmoid(gamma_raw)  # Post-sigmoid (strengthened scaling)
-                        # Three values: layer_index, gamma_mean_post_sigmoid, min_gamma (should be > 0.1)
-                        gamma_mean = float(mx.mean(gamma_post_sigmoid).item())
-                        gamma_min = float(mx.min(gamma_post_sigmoid).item())
-                        print(f"L{i} {gamma_mean:.4f} {gamma_min:.4f}")
-                except Exception:
-                    pass
-                # FILM first: modulate input before attention
-                # Use additive modulation: ignore gamma, just add 10x beta
-                beta = self.film_layers[i].beta_linear(property_embedding)  # [B, D]
-                beta = mx.expand_dims(beta, axis=1)  # [B, 1, D]
-                decoder_output = decoder_output + 10.0 * beta
-            
-            # Self-attention with causal+padding mask (on modulated input)
+        for layer in self.decoder_layers:
             decoder_output = layer(decoder_output, combined_mask)
         
         logits = self.output_projection(decoder_output)  # [B, T, vocab_size]

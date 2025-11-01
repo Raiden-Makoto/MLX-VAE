@@ -30,7 +30,7 @@ class SelfiesTransformerVAE(nn.Module):
         )
         self.latent_dim = latent_dim
         
-        # FILM embeddings for decoder (properties only modulate decoder)
+        # Property encoders (used for latent injection)
         self.property_encoder_logp = nn.Sequential(
             nn.Linear(1, hidden_dim),
             nn.ReLU(),
@@ -41,6 +41,9 @@ class SelfiesTransformerVAE(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, embedding_dim)
         )
+        
+        # Project property embeddings to latent dimension for direct injection
+        self.property_to_latent = nn.Linear(2 * embedding_dim, latent_dim)
         
         # Predictor: TPSA -> latent z
         self.tpsa_predictor = TPSAToLatentPredictor(latent_dim=latent_dim, hidden_dim=hidden_dim)
@@ -92,41 +95,45 @@ class SelfiesTransformerVAE(nn.Module):
         # Optional noise
         if training and noise_std > 0:
             z = z + mx.random.normal(z.shape) * noise_std
-        # Build FILM embedding if properties provided
-        film_embedding = None
+        # Inject properties directly into latent space if provided
         if properties is not None and properties.shape[1] >= 2:
             logp_properties = properties[:, :1]
             tpsa_properties = properties[:, 1:2]
-            # Normalize properties if stats are available to match inference path
+            # Normalize properties if stats are available
             if self.logp_mean is not None and self.logp_std is not None:
                 logp_properties = (logp_properties - self.logp_mean) / self.logp_std
             if self.tpsa_mean is not None and self.tpsa_std is not None:
                 tpsa_properties = (tpsa_properties - self.tpsa_mean) / self.tpsa_std
             logp_emb = self.property_encoder_logp(logp_properties)
             tpsa_emb = self.property_encoder_tpsa(tpsa_properties)
-            # Concatenate property embeddings to form FILM context
-            film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
-            # Optional debug: check if embeddings carry signal
-            try:
-                import os
-                if os.environ.get('FILM_DEBUG', '0') == '1':
-                    lp_std = float(mx.std(logp_emb).item())
-                    tp_std = float(mx.std(tpsa_emb).item())
-                    print(f"EMB_STD {lp_std:.6f} {tp_std:.6f}")
-            except Exception:
-                pass
-        # Decode
-        logits = self.decoder(z, input_seq, film_embedding)
+            # Concatenate and project to latent dimension
+            prop_emb = mx.concatenate([logp_emb, tpsa_emb], axis=-1)  # [B, 2*embedding_dim]
+            prop_latent = self.property_to_latent(prop_emb)  # [B, latent_dim]
+            # INJECT property directly into latent (key change!)
+            z = z + prop_latent
+        
+        # Decode (no FILM needed anymore!)
+        logits = self.decoder(z, input_seq)
         # Auxiliary TPSA prediction (normalized) when properties are provided
         aux_tpsa_pred = None
-        if film_embedding is not None:
-            z_film = mx.concatenate([z, film_embedding], axis=-1)
-            aux_tpsa_pred = self.aux_property_head(z_film)
+        if properties is not None and properties.shape[1] >= 2:
+            # For aux head, still use property embeddings concatenated with z
+            logp_properties = properties[:, :1]
+            tpsa_properties = properties[:, 1:2]
+            if self.logp_mean is not None and self.logp_std is not None:
+                logp_properties = (logp_properties - self.logp_mean) / self.logp_std
+            if self.tpsa_mean is not None and self.tpsa_std is not None:
+                tpsa_properties = (tpsa_properties - self.tpsa_mean) / self.tpsa_std
+            logp_emb = self.property_encoder_logp(logp_properties)
+            tpsa_emb = self.property_encoder_tpsa(tpsa_properties)
+            prop_emb = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
+            z_prop = mx.concatenate([z, prop_emb], axis=-1)
+            aux_tpsa_pred = self.aux_property_head(z_prop)
         # Return VAE outputs + optional aux prediction
         return logits, mu, logvar, aux_tpsa_pred
 
     def generate_conditional(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
-        """Generate molecules with properties via FILM-only conditioning; z ~ N(0,I)."""
+        """Generate molecules with properties via direct latent injection; z ~ N(0,I) + property."""
         # Normalize properties
         if self.logp_mean is not None and self.logp_std is not None:
             norm_logp = (target_logp - self.logp_mean) / self.logp_std
@@ -136,25 +143,34 @@ class SelfiesTransformerVAE(nn.Module):
             norm_tpsa = (target_tpsa - self.tpsa_mean) / self.tpsa_std
         else:
             norm_tpsa = target_tpsa
-        # Sample z from standard normal
-        z = mx.random.normal((num_samples, self.latent_dim))
-        # Build FILM embedding
+        
+        # Get property embedding
         logp_array = mx.array([[norm_logp]] * num_samples)
         tpsa_array = mx.array([[norm_tpsa]] * num_samples)
         logp_emb = self.property_encoder_logp(logp_array)
         tpsa_emb = self.property_encoder_tpsa(tpsa_array)
-        film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
-        # Decode
-        return self._decode_conditional(z, film_embedding, temperature, top_k)
+        
+        # Concatenate and project to latent dimension
+        prop_emb = mx.concatenate([logp_emb, tpsa_emb], axis=-1)  # [B, 2*embedding_dim]
+        prop_latent = self.property_to_latent(prop_emb)  # [B, latent_dim]
+        
+        # Sample base latent from prior
+        z_base = mx.random.normal((num_samples, self.latent_dim))
+        
+        # INJECT property directly into latent (key change!)
+        z_conditioned = z_base + prop_latent
+        
+        # Decode (no FILM needed!)
+        return self._decode_conditional(z_conditioned, temperature, top_k)
 
-    def _decode_conditional(self, z, property_embedding, temperature, top_k):
+    def _decode_conditional(self, z, temperature, top_k):
         batch_size = z.shape[0]
         START = 1
         END = 2
         seq = mx.full((batch_size, 1), START, dtype=mx.int32)
         max_length = 50
         for _ in range(max_length - 1):
-            logits = self.decoder(z, seq, property_embedding)[:, -1, :]
+            logits = self.decoder(z, seq)[:, -1, :]
             if mx.any(mx.isnan(logits)) or mx.any(mx.isinf(logits)):
                 logits = mx.nan_to_num(logits, nan=-1e9, posinf=-1e9, neginf=-1e9)
             if top_k > 0:
@@ -173,7 +189,7 @@ class SelfiesTransformerVAE(nn.Module):
         return seq
 
     def generate_conditional_inverse(self, target_logp, target_tpsa, num_samples=100, temperature=1.0, top_k=10):
-        """Use learned TPSA→z mapping to generate molecules guided by target properties."""
+        """Use learned TPSA→z mapping + property injection to generate molecules."""
         # Normalize TPSA
         if self.tpsa_mean is not None and self.tpsa_std is not None:
             norm_tpsa = (target_tpsa - self.tpsa_mean) / self.tpsa_std
@@ -181,8 +197,9 @@ class SelfiesTransformerVAE(nn.Module):
             norm_tpsa = target_tpsa
         # Predict z from target TPSA
         tpsa_arr = mx.array([[norm_tpsa]] * num_samples)
-        z = self.tpsa_predictor(tpsa_arr)
-        # Build FILM embedding from targets
+        z_base = self.tpsa_predictor(tpsa_arr)
+        
+        # Inject properties into latent
         if self.logp_mean is not None and self.logp_std is not None:
             norm_logp = (target_logp - self.logp_mean) / self.logp_std
         else:
@@ -190,9 +207,14 @@ class SelfiesTransformerVAE(nn.Module):
         logp_arr = mx.array([[norm_logp]] * num_samples)
         logp_emb = self.property_encoder_logp(logp_arr)
         tpsa_emb = self.property_encoder_tpsa(tpsa_arr)
-        film_embedding = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
+        prop_emb = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
+        prop_latent = self.property_to_latent(prop_emb)
+        
+        # Inject properties into latent
+        z_conditioned = z_base + prop_latent
+        
         # Decode
-        return self._decode_conditional(z, film_embedding, temperature, top_k)
+        return self._decode_conditional(z_conditioned, temperature, top_k)
 
 
     def generate_conditional_with_search(self, target_logp, target_tpsa, num_candidates=1000, top_k=100):
@@ -217,21 +239,23 @@ class SelfiesTransformerVAE(nn.Module):
         else:
             norm_tpsa = target_tpsa
 
-        # Sample many candidates
-        z_candidates = mx.random.normal((num_candidates, self.latent_dim))
-
-        # Create FILM embedding for target properties
+        # Sample many candidates and inject properties
+        z_base = mx.random.normal((num_candidates, self.latent_dim))
+        
+        # Create property embeddings and inject into latent
         logp_arr = mx.array([[norm_logp]] * num_candidates)
         tpsa_arr = mx.array([[norm_tpsa]] * num_candidates)
         logp_emb = self.property_encoder_logp(logp_arr)
         tpsa_emb = self.property_encoder_tpsa(tpsa_arr)
-        film_emb = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
+        prop_emb = mx.concatenate([logp_emb, tpsa_emb], axis=-1)
+        prop_latent = self.property_to_latent(prop_emb)
+        z_conditioned = z_base + prop_latent
 
         # Generate molecules and compute their properties
         selfies_list = []
         for i in range(num_candidates):
-            z_single = z_candidates[i:i+1]
-            seq = self._decode_conditional(z_single, film_emb[i:i+1], temperature=1.0, top_k=10)
+            z_single = z_conditioned[i:i+1]
+            seq = self._decode_conditional(z_single, temperature=1.0, top_k=10)
             # Convert to SELFIES
             seq_selfies = tokens_to_selfies(seq)
             if seq_selfies and isinstance(seq_selfies[0], str) and len(seq_selfies[0]) > 0:
