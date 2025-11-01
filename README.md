@@ -116,28 +116,28 @@ python mlx_data/download_chembl_cns.py
 
 **Train VAE (with mandatory TPSA stratification):**
 ```bash
-python train.py --epochs 50 --batch_size 128 --learning_rate 1e-4 \
+python scripts/train.py --epochs 50 --batch_size 128 --learning_rate 1e-4 \
                 --num_heads 4 --num_layers 4 --dropout 0.1 \
                 --tpsa_bins 5 --per_bin 2000
 ```
 
 **Train TPSA→z Predictor (after VAE):**
 ```bash
-python train_predictor.py --epochs 50 --batch_size 128 --learning_rate 1e-4
+python scripts/train_predictor.py --epochs 50 --batch_size 128 --learning_rate 1e-4
 ```
 
 ### Conditional Generation & Analysis (TPSA-targeted)
 ```bash
 # Generate molecules with a specific TPSA target (inverse mapping + FiLM)
-python inference.py --num_samples 128 --tpsa 72.0
+python scripts/inference.py --num_samples 128 --tpsa 72.0
 
 # Or use default targets (median values from dataset)
-python inference.py
+python scripts/inference.py
 ```
 
 ### Unconditional Generation
 ```bash
-python inference.py --regular --num_samples 128
+python scripts/inference.py --regular --num_samples 128
 ```
 
 ### Validation Only
@@ -179,10 +179,12 @@ QVAE/
 │   ├── dataloader.py     # Training data loader
 │   ├── qm9_cns_selfies.json  # SELFIES data with LogP/TPSA properties
 │   └── qm9_cns_tokenized.npy  # Tokenized sequences
+├── scripts/              # Training and inference scripts
+│   ├── train.py          # Training script
+│   ├── train_predictor.py # TPSA→z predictor training
+│   └── inference.py      # Conditional generation and analysis pipeline
 ├── checkpoints/          # Model checkpoints and metadata
-├── output/               # Generated molecules and visualizations
-├── train.py              # Training script
-└── inference.py          # Conditional generation and analysis pipeline
+└── output/               # Generated molecules and visualizations
 ```
 
 ## 🎯 Key Innovations

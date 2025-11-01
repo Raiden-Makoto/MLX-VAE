@@ -33,7 +33,7 @@ ROOT_DIR="$(cd "$(dirname "$0")" && pwd)"
 cd "$ROOT_DIR"
 
 echo "=== Step 1/3: Train VAE (epochs=$EPOCHS) ==="
-python "$ROOT_DIR/train.py" --epochs "$EPOCHS"
+python "$ROOT_DIR/scripts/train.py" --epochs "$EPOCHS"
 
 echo "=== Step 2/3: Train TPSA→z predictor with early stopping (patience=$PATIENCE, max_epochs=$PRED_MAX_EPOCHS) ==="
 BEST_MSE="inf"
@@ -42,7 +42,7 @@ for (( ep=1; ep<=PRED_MAX_EPOCHS; ep++ )); do
   echo "-- Predictor epoch $ep --"
   # Train a single epoch to enable shell-level early stopping
   OUT_FILE="/tmp/train_predictor_epoch_${ep}.log"
-  python "$ROOT_DIR/train_predictor.py" --epochs 1 --checkpoint_dir "$ROOT_DIR/checkpoints" > "$OUT_FILE" 2>&1 || true
+  python "$ROOT_DIR/scripts/train_predictor.py" --epochs 1 --checkpoint_dir "$ROOT_DIR/checkpoints" > "$OUT_FILE" 2>&1 || true
   # Parse last reported MSE from stdout
   MSE_LINE="$(grep -E "^PRED_MSE=" "$OUT_FILE" | tail -n 1 || true)"
   MSE_VAL="${MSE_LINE#PRED_MSE=}"
@@ -74,7 +74,7 @@ PY
 done
 
 echo "=== Step 3/3: Run inference (num_samples=$NUM_SAMPLES) ==="
-python "$ROOT_DIR/inference.py" --num_samples "$NUM_SAMPLES" --checkpoint "$ROOT_DIR/checkpoints"
+python "$ROOT_DIR/scripts/inference.py" --num_samples "$NUM_SAMPLES" --checkpoint "$ROOT_DIR/checkpoints"
 
 echo "All done. Results in output/ and checkpoints/."
 
