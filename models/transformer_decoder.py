@@ -74,24 +74,28 @@ class SelfiesTransformerDecoder(nn.Module):
         # Self-attention layers with FILM conditioning
         decoder_output = embedded
         for i, layer in enumerate(self.decoder_layers):
-            # Self-attention with causal+padding mask
-            decoder_output = layer(decoder_output, combined_mask)
-            
-            # Apply FILM conditioning if properties provided
+            # Apply FILM conditioning BEFORE attention (strong modulation to shape what attention sees)
             if property_embedding is not None:
-                # Debug: Print per-layer gamma stats (post-softplus to verify fix)
+                # Debug: Print per-layer gamma stats (post-sigmoid to verify strengthened scaling)
                 try:
                     import os
                     if os.environ.get('FILM_DEBUG', '0') == '1':
                         gamma_raw = self.film_layers[i].gamma_linear(property_embedding)  # [B, D]
-                        gamma_post_softplus = nn.softplus(gamma_raw)  # Post-softplus (always positive)
-                        # Three values: layer_index, gamma_mean_post_softplus, min_gamma (should be > 0)
-                        gamma_mean = float(mx.mean(gamma_post_softplus).item())
-                        gamma_min = float(mx.min(gamma_post_softplus).item())
+                        gamma_post_sigmoid = 0.1 + 3.0 * mx.sigmoid(gamma_raw)  # Post-sigmoid (strengthened scaling)
+                        # Three values: layer_index, gamma_mean_post_sigmoid, min_gamma (should be > 0.1)
+                        gamma_mean = float(mx.mean(gamma_post_sigmoid).item())
+                        gamma_min = float(mx.min(gamma_post_sigmoid).item())
                         print(f"L{i} {gamma_mean:.4f} {gamma_min:.4f}")
                 except Exception:
                     pass
-                decoder_output = self.film_layers[i](decoder_output, property_embedding)
+                # FILM first: modulate input before attention
+                # Use additive modulation: ignore gamma, just add 10x beta
+                beta = self.film_layers[i].beta_linear(property_embedding)  # [B, D]
+                beta = mx.expand_dims(beta, axis=1)  # [B, 1, D]
+                decoder_output = decoder_output + 10.0 * beta
+            
+            # Self-attention with causal+padding mask (on modulated input)
+            decoder_output = layer(decoder_output, combined_mask)
         
         logits = self.output_projection(decoder_output)  # [B, T, vocab_size]
         return logits

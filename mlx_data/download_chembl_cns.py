@@ -21,8 +21,8 @@ output_path = 'mlx_data/chembl_cns_selfies.json'
 output_npy = 'mlx_data/chembl_cns_tokenized.npy'
 
 # Fresh start: initialize empty accumulator (wipe any prior state)
-output_data = []
-existing_smiles = set()
+    output_data = []
+    existing_smiles = set()
 
 def smiles_to_selfies(smiles_str):
     try:
@@ -193,4 +193,4 @@ with open(output_path, 'w') as f:
 np.save(output_npy, tokenized_data)
 
 print(f"\n Saved {len(output_data)} ChEMBL CNS molecules to {output_path}")
-print(f"   Average TPSA: {np.mean(tpsa_values):.2f}")
+    print(f"   Average TPSA: {np.mean(tpsa_values):.2f}")

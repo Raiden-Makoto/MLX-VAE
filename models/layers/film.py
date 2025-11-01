@@ -19,11 +19,11 @@ class FILM(nn.Module):
             modulated_features: [B, T, D] - features modulated by conditions
         """
         # Generate modulation parameters
-        gamma = self.gamma_linear(conditions)  # [B, D]
+        gamma_raw = self.gamma_linear(conditions)  # [B, D]
         beta = self.beta_linear(conditions)     # [B, D]
         
-        # Enforce positive gamma to prevent signal inversion (fix for negative gamma bug)
-        gamma = nn.softplus(gamma)  # Always positive: softplus(x) = log(1 + exp(x))
+        # Strengthen gamma scaling: [0.1, 20.1] range for 20x amplification
+        gamma = 0.1 + 20.0 * mx.sigmoid(gamma_raw)  # Strong modulation to overcome decoder bias
         
         # Broadcast gamma and beta across sequence length
         # features is [B, T, D], so we expand to [B, 1, D] and broadcast

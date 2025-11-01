@@ -160,9 +160,7 @@ def compute_reinforce_loss(
         # Reward any improvement, not just hitting target exactly
         reward_shaped = -tpsa_error / float(tol_band)
         
-        # Clip reward to [-1, 0] as specified
-        reward_shaped = mx.clip(reward_shaped, -1.0, 0.0)
-        
+        # Don't clip yet - preserve signal range
         # Add bonus for being within tolerance band (positive reinforcement for good performance)
         within_tol = tpsa_error <= tol_band
         # Bonus makes reward positive when within tolerance
@@ -177,6 +175,9 @@ def compute_reinforce_loss(
     # Scale reward if requested
     if reward_scale != 1.0:
         reward_arr = reward_arr * float(reward_scale)
+    
+    # Clip reward to preserve signal (allow -167 through, not just -30)
+    reward_arr = mx.clip(reward_arr, -167.0, 10.0)  # Allow negative errors up to -167, positive up to 10
     
     reward = reward_arr
     valid_mask_mx = valid_mx

@@ -28,11 +28,11 @@ parser.add_argument('--epochs', type=int, default=10, help='Number of epochs to 
 parser.add_argument('--beta_warmup_epochs', type=int, default=10, help='Epochs to warm up beta from 0 to 1')
 parser.add_argument('--max_beta', type=float, default=1.0, help='Maximum beta value (CVAE best practice: 1.0 for full KL divergence)')
 parser.add_argument('--latent_noise_std', type=float, default=0.05, help='Standard deviation of Gaussian noise added to latent vectors during training')
-parser.add_argument('--diversity_weight', type=float, default=0.01, help='Weight for latent diversity loss')
+parser.add_argument('--diversity_weight', type=float, default=0.5, help='Weight for latent diversity loss')
 parser.add_argument('--dropout', type=float, default=0.1, help='Dropout rate')
 parser.add_argument('--resume', action='store_true', help='Resume training from best model and last epoch')
 parser.add_argument('--property_weight', type=float, default=100.0, help='Weight for property reconstruction loss (predict TPSA from z+FILM)')
-parser.add_argument('--policy_weight_max', type=float, default=10.0, help='Maximum policy weight (curriculum learning)')
+parser.add_argument('--policy_weight_max', type=float, default=0.5, help='Maximum policy weight (curriculum learning)')
 parser.add_argument('--aux_weight', type=float, default=5.0, help='Weight for auxiliary TPSA head MSE (normalized)')
  # RL sampling and curriculum use fixed defaults in code (no CLI flags)
  # Predictor training moved to train_predictor.py to keep this file focused
@@ -68,7 +68,7 @@ properties = np.stack([
 args = parser.parse_args()
 
 # Always use REINFORCE
-USE_REINFORCE = True
+USE_REINFORCE = False
 
 # Model architecture is fixed in code; no CLI for heads/layers
 
@@ -361,6 +361,10 @@ else:
     print(f"Property weight: {args.property_weight} (forces decoder to respect z+FILM)")
 print("="*67)
 
+# Track metrics for 10-epoch summaries
+epoch_summaries = []
+SUMMARY_LOG = 'training_summary.log'
+
 for epoch in range(start_epoch, total_epochs):
     beta = get_beta(epoch, args.epochs, args.beta_warmup_epochs, args.max_beta)
     
@@ -420,10 +424,41 @@ for epoch in range(start_epoch, total_epochs):
         final_aux = mx.mean(mx.array(epoch_aux)).item() if epoch_aux else 0.0
         print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Policy={final_policy:.4f} Reward={final_reward:.2f} Valid={final_valid*100:.1f}% Aux={final_aux:.4f} Total={final_loss:.4f}")
         print(f"Val: Total={val_total:.4f} Recon={val_recon:.4f} KL={val_kl:.4f} Div={val_div:.4f}")
+        # Store summary
+        epoch_summaries.append({
+            'epoch': epoch+1, 'recon': final_recon, 'kl': final_kl, 'policy': final_policy,
+            'reward': final_reward, 'valid': final_valid, 'aux': final_aux, 'total': final_loss,
+            'val_total': val_total, 'val_recon': val_recon, 'val_kl': val_kl, 'val_div': val_div
+        })
     else:
         final_prop = mx.mean(mx.array(epoch_prop)).item() if epoch_prop else 0.0
         print(f"\nEpoch {epoch+1}: Recon={final_recon:.4f} KL={final_kl:.4f} Prop={final_prop:.4f} Total={final_loss:.4f}")
         print(f"Val: Total={val_total:.4f} Recon={val_recon:.4f} KL={val_kl:.4f} Div={val_div:.4f} Prop={val_prop:.4f}")
+        # Store summary
+        epoch_summaries.append({
+            'epoch': epoch+1, 'recon': final_recon, 'kl': final_kl, 'prop': final_prop,
+            'total': final_loss, 'val_total': val_total, 'val_recon': val_recon,
+            'val_kl': val_kl, 'val_div': val_div, 'val_prop': val_prop
+        })
+    
+    # Write 10-epoch summary every 10 epochs
+    if (epoch + 1) % 10 == 0 and len(epoch_summaries) >= 10:
+        summary_epochs = epoch_summaries[-10:]
+        with open(SUMMARY_LOG, 'a') as f:
+            f.write(f"\n{'='*70}\n")
+            f.write(f"10-Epoch Summary: Epochs {summary_epochs[0]['epoch']}-{summary_epochs[-1]['epoch']}\n")
+            f.write(f"{'='*70}\n")
+            for s in summary_epochs:
+                if USE_REINFORCE:
+                    f.write(f"Epoch {s['epoch']}: Recon={s['recon']:.4f} KL={s['kl']:.4f} Policy={s['policy']:.4f} "
+                           f"Reward={s['reward']:.2f} Valid={s['valid']*100:.1f}% Aux={s['aux']:.4f} Total={s['total']:.4f}\n")
+                    f.write(f"Val: Total={s['val_total']:.4f} Recon={s['val_recon']:.4f} KL={s['val_kl']:.4f} Div={s['val_div']:.4f}\n")
+                else:
+                    f.write(f"Epoch {s['epoch']}: Recon={s['recon']:.4f} KL={s['kl']:.4f} Prop={s['prop']:.4f} Total={s['total']:.4f}\n")
+                    f.write(f"Val: Total={s['val_total']:.4f} Recon={s['val_recon']:.4f} KL={s['val_kl']:.4f} Div={s['val_div']:.4f} Prop={s['val_prop']:.4f}\n")
+            f.write(f"{'='*70}\n\n")
+            f.flush()
+        print(f"\n10-epoch summary written to {SUMMARY_LOG}")
     # Save best
     # Track best by validation total loss
     if val_total < best_loss:
