@@ -525,3 +525,56 @@ class ARCVAETrainerWithLoss:
             print(f"    Saved plot: {save_path}")
         else:
             plt.show()
+    
+    def load_checkpoint(self, checkpoint_path: str):
+        """Load model checkpoint"""
+        checkpoint = np.load(checkpoint_path, allow_pickle=True)
+        
+        # Load encoder weights
+        if 'encoder_weights' in checkpoint:
+            encoder_weights = checkpoint['encoder_weights'].item()
+            self._load_module_weights(self.encoder, encoder_weights)
+        
+        # Load decoder weights
+        if 'decoder_weights' in checkpoint:
+            decoder_weights = checkpoint['decoder_weights'].item()
+            self._load_module_weights(self.decoder, decoder_weights)
+        
+        # Load optimizer states
+        if 'encoder_optimizer_state' in checkpoint:
+            optimizer_state = checkpoint['encoder_optimizer_state'].item()
+            self.encoder_optimizer.state = self._convert_to_mlx(optimizer_state)
+        if 'decoder_optimizer_state' in checkpoint:
+            optimizer_state = checkpoint['decoder_optimizer_state'].item()
+            self.decoder_optimizer.state = self._convert_to_mlx(optimizer_state)
+        
+        # Load training history
+        if 'history' in checkpoint:
+            self.history = checkpoint['history'].item()
+        
+        epoch = int(checkpoint.get('epoch', 0))
+        return epoch
+    
+    @staticmethod
+    def _load_module_weights(module, weights):
+        """Load weights into a module"""
+        for key, value in weights.items():
+            if hasattr(module, key):
+                if isinstance(value, dict):
+                    # Nested module weights
+                    submodule = getattr(module, key)
+                    ARCVAETrainerWithLoss._load_module_weights(submodule, value)
+                else:
+                    # Convert numpy array to MLX array
+                    mlx_value = mx.array(value) if not isinstance(value, mx.array) else value
+                    setattr(module, key, mlx_value)
+    
+    @staticmethod
+    def _convert_to_mlx(obj):
+        """Recursively convert numpy arrays to MLX arrays"""
+        if isinstance(obj, dict):
+            return {k: ARCVAETrainerWithLoss._convert_to_mlx(v) for k, v in obj.items()}
+        elif isinstance(obj, np.ndarray):
+            return mx.array(obj)
+        else:
+            return obj

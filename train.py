@@ -7,6 +7,7 @@ import argparse
 import json
 import numpy as np
 from pathlib import Path
+import shutil
 
 from mlx_data.dataloader import MoleculeDataset
 from models.vae import ARCVAE
@@ -53,6 +54,10 @@ def main():
                         help='Validation set fraction')
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
+    parser.add_argument('--resume', type=str, default=None,
+                        help='Path to checkpoint to resume from')
+    parser.add_argument('--clear_checkpoints', action='store_true',
+                        help='Clear old checkpoints before starting')
     
     args = parser.parse_args()
     
@@ -122,6 +127,34 @@ def main():
     print(f"  - Validation: {len(val_dataset):,} samples")
     print(f"  - Test: {len(test_dataset):,} samples")
     
+    # Handle checkpoint clearing/resuming
+    checkpoint_dir = Path(args.checkpoint_dir)
+    start_epoch = 0
+    best_val_loss = float('inf')
+    
+    if args.resume:
+        # Resume from checkpoint
+        print(f"\nResuming from checkpoint: {args.resume}")
+        checkpoint_path = Path(args.resume)
+        if not checkpoint_path.exists():
+            raise FileNotFoundError(f"Checkpoint not found: {args.resume}")
+        
+        # Load checkpoint
+        checkpoint = np.load(str(checkpoint_path), allow_pickle=True)
+        start_epoch = int(checkpoint['epoch']) + 1
+        best_val_loss = float(checkpoint.get('best_val_loss', float('inf')))
+        
+        print(f"  Resuming from epoch {start_epoch}")
+        print(f"  Best validation loss so far: {best_val_loss:.4f}")
+    elif args.clear_checkpoints and checkpoint_dir.exists():
+        # Clear old checkpoints
+        print(f"\nClearing old checkpoints in {checkpoint_dir}")
+        for checkpoint_file in checkpoint_dir.glob("*.npz"):
+            checkpoint_file.unlink()
+        for plot_file in checkpoint_dir.glob("history_*.png"):
+            plot_file.unlink()
+        print("✓ Cleared old checkpoints")
+    
     # Create VAE model
     print("\nCreating VAE model...")
     vae = ARCVAE(
@@ -154,14 +187,20 @@ def main():
     )
     print("✓ Trainer created")
     
+    # Load checkpoint if resuming
+    if args.resume:
+        loaded_epoch = trainer.load_checkpoint(args.resume)
+        # Override start_epoch and best_val_loss from checkpoint
+        if loaded_epoch >= 0:
+            start_epoch = loaded_epoch + 1
+        print(f"✓ Loaded checkpoint from epoch {loaded_epoch}")
+    
     # Training loop
     print("\n" + "=" * 80)
     print("Training")
     print("=" * 80)
     
-    best_val_loss = float('inf')
-    
-    for epoch in range(args.epochs):
+    for epoch in range(start_epoch, args.epochs):
         print(f"\nEpoch {epoch + 1}/{args.epochs}")
         print("-" * 80)
         
