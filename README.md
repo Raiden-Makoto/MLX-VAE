@@ -1,208 +1,212 @@
-# Transformer-VAE: Advanced Molecular Generation with FiLM-Conditioned Property Control
+# AR-CVAE: Autoregressive Conditional VAE for Molecular Generation
 
-A cutting-edge Variational Autoencoder (VAE) for molecular generation using SELFIES representation, built with Apple's MLX framework and powered by Transformer architecture with **FiLM-conditioned property-guided generation**.
+A Variational Autoencoder (VAE) for molecular generation using SELFIES representation, built with Apple's MLX framework and powered by LSTM-based autoregressive architecture with property conditioning.
 
 ## 🧬 Overview
 
-This project implements a sophisticated VAE that learns to generate novel molecular structures by:
-- **Encoding** SELFIES sequences into a continuous latent space
-- **Decoding** latent representations back into valid SELFIES molecules
-- **Generating** chemically valid molecules with **TPSA-targeted control** via FiLM and inverse mapping (TPSA→z)
-- **Filtering** molecules for stability, synthetic accessibility, and conformational strain
-- **FiLM-Conditioned Generation**: Advanced feature-wise linear modulation for sophisticated property control
+This project implements an Autoregressive Conditional VAE (AR-CVAE) that learns to generate novel molecular structures by:
+- **Encoding** SELFIES sequences into a continuous latent space using stacked LSTM layers
+- **Decoding** latent representations autoregressively with property conditioning
+- **Generating** chemically valid molecules with TPSA-targeted control
+- **Training** with advanced regularization to prevent posterior collapse
 
 ## ✨ Key Features
 
 ### Core Architecture
-- **SELFIES Representation**: Uses SELFIES (Self-Referencing Embedded Strings) for 100% chemically valid molecular generation
-- **Transformer Architecture**: State-of-the-art multi-head self-attention mechanism with positional encoding
-- **Self-Attention Decoder**: Uses self-attention (not cross-attention) for proper sequence learning
-- **Parallel Processing**: Processes all sequence positions simultaneously for faster training
-- **Causal Masking**: Ensures autoregressive generation with proper attention patterns
+- **SELFIES Representation**: Uses SELFIES (Self-Referencing Embedded Strings) for chemically valid molecular generation
+- **LSTM-Based**: Stacked LSTM layers for sequence encoding and autoregressive decoding
+- **Autoregressive Decoder**: Token-by-token generation with teacher forcing during training
+- **Property Conditioning**: TPSA properties concatenated with embeddings for conditional generation
 - **MLX Framework**: Optimized for Apple Silicon with efficient memory usage
-- **FiLM Layers**: Feature-wise Linear Modulation for sophisticated property conditioning
-
-### FiLM-Conditioned Generation (DEFAULT)
-- **Feature-wise Linear Modulation**: Advanced conditioning using γ (scaling) and β (shifting) parameters
-- **Property-Guided Sampling**: Generate molecules targeting TPSA (primary) and optionally LogP
-- **Default Targets**: TPSA default can be set to dataset median/mode
-- **Sophisticated Control**: Each latent dimension gets property-specific transformations
-- **Accuracy Analysis**: Real-time evaluation of how well generated molecules match targets
-- **Flexible Targeting**: Customize LogP and TPSA values for specific applications
-- **Backward Compatibility**: Regular generation available with `--regular` flag
 
 ### Advanced Training Features
-- **β-Annealing**: Gradual KL divergence warm-up for stable training
-- **Free Bits**: Prevents posterior collapse with configurable KL thresholds
-- **Information Regularization**: Encourages diverse latent representations
-- **Diversity Loss**: Promotes molecular diversity in generated samples
-- **Dropout Regularization**: Prevents overfitting with configurable dropout rates
-- **FiLM-Conditioned Training**: Properties fed to decoder via FiLM; latent is regularized only by VAE loss
-- **TPSA→z Inverse Mapping**: Separate predictor learns mapping from normalized TPSA to latent z for stronger control
-- **Stratified Sampling (Mandatory)**: Training uses TPSA-binned, equal-per-bin sampling to de-skew the dataset
+- **β-Annealing**: Gradual KL divergence warm-up (default: 20 epochs)
+- **Free Bits Constraint**: Minimum KL per dimension (default: 0.5) to prevent posterior collapse
+- **Mutual Information Penalty**: Encourages diverse latent representations
+- **Posterior Collapse Penalty**: Additional regularization to prevent latent collapse
+- **Teacher Forcing Decay**: Starts at 0.7, decays to 0.3 over training
+- **Gradient Clipping**: Prevents exploding gradients
+- **Checkpoint Management**: Automatic clearing (unless resuming), checkpoint saving
 
-### Molecular Validation & Filtering
-- **Chemical Stability Filtering**: Removes peroxides, small rings, and azides
-- **Synthetic Accessibility (SA_Score)**: Filters molecules based on synthetic feasibility
-- **Drug-likeness (QED)**: Evaluates molecules for drug-like properties
-- **Conformational Strain**: Removes molecules with high strain energy (>100 kcal/mol)
-- **Comprehensive Properties**: LogP, TPSA, Molecular Weight, Heavy Atoms, Rotatable Bonds
-
-## 📊 Performance
-
-- **High Success Rate**: Generates chemically valid molecules with comprehensive filtering
-- **FiLM-Conditioned Accuracy**: Enhanced LogP and TPSA accuracy through sophisticated feature-wise modulation
-- **Diverse Properties**: Wide range of LogP, TPSA, MW, QED, and SAS values
-- **Fast Training**: Efficient MLX implementation with gradient clipping and layer normalization
-- **Stable Convergence**: Advanced regularization prevents KL collapse and posterior collapse
-- **Quality Control**: Multi-stage filtering ensures generated molecules are stable and synthesizable
-- **Property Guidance**: Successfully generates molecules targeting specific LogP and TPSA values
+### Training Optimizations
+- **Optimized Training Loop**: Combined eval calls, efficient gradient clipping
+- **Progress Bars**: tqdm progress bars for training and validation
+- **Fixed Sequence Length**: 80 tokens (matched to dataset)
+- **80/10/10 Split**: Fixed train/val/test data split
+- **Reproducible**: Fixed random seed (67) for reproducibility
 
 ## 🏗️ Architecture
 
 ```
-Input SELFIES → Transformer Encoder → Latent (μ, σ) → Reparameterization → Decoder (Self-Attention) → Generated SELFIES
+Input SELFIES → LSTM Encoder → Latent (μ, σ) → Reparameterization → LSTM Decoder (Autoregressive) → Generated SELFIES
                     ↑                                                                  ↑
-             Properties (LogP, TPSA)  →   Property Encoder → FILM Layers (γ, β) ─────────┘
-                    ↓
-       Stable, Synthesizable, Property-Controlled Molecules
+             Properties (TPSA) ───────────────────────────────────────────── Concatenated ─────────┘
 ```
 
-### Conditional Generation Path
+### Loss Function
 
-The model trains a VAE (reconstruction + β·KL). Properties modulate the decoder via FiLM. At inference, TPSA control uses an inverse mapping (TPSA→z) to select latent codes near the target.
-
-$$\mathcal{L}(\theta, \phi) = \mathbb{E}_{q_\phi(z|x,c)}[\log p_\theta(x|z,c)] - \beta \cdot D_{KL}(q_\phi(z|x,c) || p(z|c)) + \lambda_{div} \cdot \mathcal{L}_{div}$$
+$$\mathcal{L} = \mathcal{L}_{recon} + \beta \cdot \mathcal{L}_{KL} + \lambda_{collapse} \cdot \mathcal{L}_{collapse} + \lambda_{MI} \cdot (-\mathcal{MI}) + \lambda_{prop} \cdot \mathcal{L}_{prop}$$
 
 Where:
-- $q_\phi(z|x,c)$: Encoder (conditional posterior)
-- $p_\theta(x|z,c)$: Decoder (conditional likelihood)  
-- $p(z|c)$: Conditional prior distribution
-- $c$: Properties (normalized LogP, TPSA)
+- $\mathcal{L}_{recon}$: Reconstruction loss (cross-entropy)
+- $\mathcal{L}_{KL}$: KL divergence with free bits constraint
+- $\mathcal{L}_{collapse}$: Posterior collapse penalty
+- $\mathcal{MI}$: Mutual information (maximized)
+- $\mathcal{L}_{prop}$: Property prediction loss (if predictor available)
 
 ### Components
 
-- **Transformer Encoder**: Multi-head self-attention → sequence pooling → $\mu, \log\sigma$
-- **Property Encoder**: 2-layer MLP: `Linear(properties) → ReLU → Linear` → property embedding
-- **Property-Conditioned Latent**: $\mu_p(c), \sigma_p(c)$ learned from properties alone
+- **LSTM Encoder**: Stacked LSTM layers → final hidden state → $\mu, \log\sigma$
+- **Property Conditioning**: TPSA properties concatenated with token embeddings
 - **Reparameterization**: $z = \mu + \sigma \odot \epsilon, \epsilon \sim \mathcal{N}(0, I)$
-- **Transformer Decoder**: Self-attention with FILM conditioning (γ, β modulation)
-- **Conditional Generation**: Sample $z \sim p(z|c)$, apply FILM conditioning, decode
-
-## 🔬 Molecular Analysis Pipeline
-
-### Validation Process
-1. **SELFIES → SMILES**: Convert and validate molecular structure
-2. **Deduplication**: Remove duplicate canonical SMILES
-3. **Chemical Filtering**: Remove unstable molecules (peroxides, small rings, etc.)
-4. **Strain Filtering**: Remove molecules with high conformational strain
-5. **Property Calculation**: Compute LogP, TPSA, MW, QED, SAS, and structural properties
-
-### Visualization
-- **Molecule Grid**: Visual display of generated molecules with property captions
-- **Property Distributions**: Histograms and scatter plots of molecular properties
-- **Quality Metrics**: Success rates, uniqueness, and property statistics
+- **LSTM Decoder**: Autoregressive token generation with property conditioning
+- **Teacher Forcing**: Uses ground truth tokens during training for stability
 
 ## 🚀 Usage
 
-### Data Preparation
-
-Download ChEMBL CNS dataset (20,000 molecules, SELFIES + TPSA only) and tokenize:
-```bash
-python mlx_data/download_chembl_cns.py
-```
-
 ### Training
 
-**Train VAE (with mandatory TPSA stratification):**
+**Basic training:**
 ```bash
-python scripts/train.py --epochs 50 --batch_size 128 --learning_rate 1e-4 \
-                --num_heads 4 --num_layers 4 --dropout 0.1 \
-                --tpsa_bins 5 --per_bin 2000
+./train.sh --epochs 50 --batch_size 128 --learning_rate 1e-4
 ```
 
-**Train TPSA→z Predictor (after VAE):**
+**Resume from checkpoint:**
 ```bash
-python scripts/train_predictor.py --epochs 50 --batch_size 128 --learning_rate 1e-4
+./train.sh --resume --epochs 100
 ```
 
-### Conditional Generation & Analysis (TPSA-targeted)
+**With custom parameters:**
 ```bash
-# Generate molecules with a specific TPSA target (inverse mapping + FiLM)
-python scripts/inference.py --num_samples 128 --tpsa 72.0
-
-# Or use default targets (median values from dataset)
-python scripts/inference.py
+./train.sh --epochs 100 --batch_size 256 --learning_rate 5e-5 \
+           --free_bits 0.5 --lambda_mi 0.01 --lambda_collapse 0.1
 ```
 
-### Unconditional Generation
-```bash
-python scripts/inference.py --regular --num_samples 128
-```
+### Key Training Parameters
 
-### Validation Only
-```bash
-python utils/validate.py  # Uses output/generated_molecules.txt
-```
+- `--epochs`: Number of training epochs (default: 50)
+- `--batch_size`: Batch size (default: 128)
+- `--learning_rate`: Adam learning rate (default: 1e-4)
+- `--beta_start`: Initial KL weight (default: 0.0)
+- `--beta_end`: Final KL weight (default: 0.4)
+- `--beta_warmup_epochs`: Epochs to warm up beta (default: 20)
+- `--free_bits`: Minimum KL per dimension (default: 0.5)
+- `--lambda_collapse`: Posterior collapse penalty weight (default: 0.1)
+- `--lambda_mi`: Mutual information penalty weight (default: 0.01)
+- `--grad_clip`: Gradient clipping norm (default: 1.0)
+- `--resume`: Resume from checkpoint_best.npz
+- `--verbose`: Print detailed epoch summaries
 
-### Visualization Only
-```bash
-python utils/visualize.py  # Uses output/validation_results.csv
-```
+### Model Architecture Parameters
+
+- `--embedding_dim`: Embedding dimension (default: 128)
+- `--hidden_dim`: LSTM hidden dimension (default: 256)
+- `--latent_dim`: Latent space dimension (default: 128)
+- `--num_layers`: Number of LSTM layers (default: 2)
+- `--dropout`: Dropout rate (default: 0.2)
 
 ## 📁 Project Structure
 
 ```
 QVAE/
-├── models/                 # Transformer VAE architecture components
-│   ├── transformer_encoder.py    # Transformer encoder with masked pooling
-│   ├── transformer_decoder.py   # Transformer decoder with self-attention
-│   ├── transformer_vae.py       # Main CVAE model with property conditioning
-│   └── layers/                   # Layer implementations
-│       ├── multi_head_attention.py
-│       ├── feed_forward.py
-│       ├── positional_encoding.py
-│       ├── transformer_encoder_layer.py
-│       ├── transformer_decoder_layer.py
-│       └── film.py
-├── utils/                 # Utility functions
-│   ├── loss.py           # Loss functions with free bits
-│   ├── sample.py         # Sampling and conditional generation
-│   ├── validate.py       # Molecular validation pipeline
-│   ├── visualize.py      # Visualization tools
-│   ├── smarts.py         # Chemical stability filtering
-│   ├── geomopt.py        # Conformational strain analysis
-│   ├── sascorer.py       # Synthetic accessibility scoring
-│   └── diversity.py      # Molecular diversity metrics
-├── mlx_data/             # Data processing and vocabulary
-│   ├── convert.py        # Dataset conversion with property calculation
-│   ├── dataloader.py     # Training data loader
-│   ├── qm9_cns_selfies.json  # SELFIES data with LogP/TPSA properties
-│   └── qm9_cns_tokenized.npy  # Tokenized sequences
-├── scripts/              # Training and inference scripts
-│   ├── train.py          # Training script
-│   ├── train_predictor.py # TPSA→z predictor training
-│   └── inference.py      # Conditional generation and analysis pipeline
-├── checkpoints/          # Model checkpoints and metadata
-└── output/               # Generated molecules and visualizations
+├── models/                 # Model architecture components
+│   ├── encoder.py          # LSTM encoder with property conditioning
+│   ├── decoder.py          # Autoregressive LSTM decoder
+│   ├── decoder_sampling.py # Temperature-based sampling decoder
+│   └── vae.py              # Complete AR-CVAE model
+├── losses/                 # Loss function modules
+│   ├── recon.py            # Reconstruction loss (cross-entropy)
+│   ├── kl.py               # KL divergence with free bits
+│   ├── info.py             # Mutual information and posterior collapse
+│   ├── prop.py             # Property prediction loss
+│   ├── enc.py              # Encoder-only loss
+│   └── dec.py              # Decoder-only loss
+├── mlx_data/               # Data processing
+│   ├── dataloader.py       # MoleculeDataset with padding/truncation
+│   └── chembl_cns_selfies.json  # Tokenized dataset (20K molecules)
+├── complete_vae_loss.py    # Complete training loss function
+├── trainer.py              # Training loop with checkpointing
+├── train.py                # Training script with CLI
+├── train.sh                # Training script wrapper
+└── checkpoints/            # Model checkpoints and history
 ```
 
-## 🎯 Key Innovations
+## 🎯 Key Features
 
-1. **Conditional VAE Architecture**: Property-controlled generation with LogP and TPSA targets
-2. **Self-Attention Decoder**: Uses self-attention (not cross-attention) for proper sequence learning
-3. **Transformer-Based**: Multi-head self-attention for sequence modeling
-4. **Property Conditioning**: Deep property encoder with FILM layers for sophisticated conditioning
-5. **Normalized Properties**: Automatic property normalization (handles 25x scale differences)
-6. **Multi-Stage Filtering**: Comprehensive molecular validation pipeline
-7. **Conformational Analysis**: Strain energy filtering for realistic molecules
-8. **Advanced Regularization**: KL annealing, diversity loss, and property prediction loss
-9. **Efficient MLX Implementation**: Optimized for Apple Silicon performance
+1. **Autoregressive Generation**: Token-by-token generation with teacher forcing
+2. **Property Conditioning**: TPSA properties guide molecule generation
+3. **Posterior Collapse Prevention**: Free bits constraint + MI penalty + collapse penalty
+4. **Efficient MLX Implementation**: Optimized training loop for Apple Silicon
+5. **Modular Loss Functions**: Separate modules for different loss components
+6. **Checkpoint Management**: Automatic clearing, resume support
+7. **Fixed Data Split**: 80/10/10 train/val/test split
+8. **Reproducible**: Fixed random seed for consistent results
 
-## 🧪 Conditional Generation
+## 📊 Dataset
 
-The model supports property-conditioned generation:
-- **LogP range**: -10.15 to 44.97 (mean: 3.25, std: 2.21)
-- **TPSA range**: 0 to 810 (mean: 81.55, std: 54.86)
-- **Median values**: LogP=3.21, TPSA=72.03 (optimal for CNS penetration)
-- **Accuracy**: Property conditioning with CVAE architecture
+- **Source**: ChEMBL CNS dataset
+- **Size**: 20,000 molecules
+- **Representation**: SELFIES (tokenized)
+- **Properties**: TPSA (Topological Polar Surface Area)
+- **Sequence Length**: 80 tokens (fixed)
+- **Vocabulary Size**: 95 tokens
+
+## 🔧 Development
+
+### Installation
+
+```bash
+# Create virtual environment
+python3 -m venv qvae
+source qvae/bin/activate
+
+# Install MLX (see MLX documentation for installation)
+# Install other dependencies
+pip install numpy tqdm
+```
+
+### Testing
+
+Individual components can be tested:
+- Encoder: `models/encoder.py`
+- Decoder: `models/decoder.py`
+- VAE: `models/vae.py`
+- Loss functions: `losses/*.py`
+
+## 📈 Training Metrics
+
+The trainer tracks:
+- Total loss
+- Reconstruction loss
+- KL divergence loss
+- Posterior collapse penalty
+- Mutual information
+- Beta (KL weight) schedule
+- Teacher forcing ratio
+
+Training history is saved to `checkpoints/training_history.json` and plotted to `checkpoints/training_history.png`.
+
+## 🎓 Technical Details
+
+- **Framework**: MLX (Apple's Machine Learning framework)
+- **Architecture**: Stacked LSTM layers (not Transformer)
+- **Conditioning**: Property concatenation (not FiLM)
+- **Sequence Length**: 80 tokens
+- **Batch Size**: 128 (default, configurable)
+- **Optimizer**: Adam
+- **Random Seed**: Fixed to 67
+
+## 📝 Notes
+
+- The autoregressive decoder loop is the main computational bottleneck
+- Training speed: ~4-6 iterations/second (depends on hardware)
+- Model size optimized for speed: embedding=128, hidden=256, latent=128, layers=2
+- All sequences are preprocessed to exactly 80 tokens
+
+## 🤝 Contributing
+
+This is a research project. For questions or improvements, please open an issue or submit a pull request.
+
+## 📄 License
+
+[Add your license here]
