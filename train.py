@@ -48,8 +48,8 @@ def main():
                         help='Checkpoint frequency (epochs)')
     parser.add_argument('--verbose', action='store_true',
                         help='Print detailed epoch summaries')
-    parser.add_argument('--resume', type=str, default=None,
-                        help='Path to checkpoint folder to resume from (if not specified, clears old checkpoints)')
+    parser.add_argument('--resume', action='store_true',
+                        help='Resume from checkpoint_best.npz in checkpoint directory (if not specified, clears old checkpoints)')
     
     args = parser.parse_args()
     
@@ -125,11 +125,12 @@ def main():
     best_val_loss = float('inf')
     
     if args.resume:
-        # Resume from checkpoint
-        print(f"\nResuming from checkpoint: {args.resume}")
-        checkpoint_path = Path(args.resume)
+        # Resume from checkpoint_best.npz in checkpoint directory
+        checkpoint_path = checkpoint_dir / "checkpoint_best.npz"
         if not checkpoint_path.exists():
-            raise FileNotFoundError(f"Checkpoint not found: {args.resume}")
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        
+        print(f"\nResuming from checkpoint: {checkpoint_path}")
         
         # Load checkpoint
         checkpoint = np.load(str(checkpoint_path), allow_pickle=True)
@@ -184,11 +185,12 @@ def main():
     
     # Load checkpoint if resuming
     if args.resume:
-        loaded_epoch = trainer.load_checkpoint(args.resume)
-        # Override start_epoch and best_val_loss from checkpoint
+        checkpoint_path = checkpoint_dir / "checkpoint_best.npz"
+        loaded_epoch = trainer.load_checkpoint(str(checkpoint_path))
+        # Override start_epoch and best_val_loss from checkpoint (already loaded above, but keep for consistency)
         if loaded_epoch >= 0:
             start_epoch = loaded_epoch + 1
-        print(f"✓ Loaded checkpoint from epoch {loaded_epoch}")
+        print(f"✓ Loaded model weights from epoch {loaded_epoch}")
     
     # Training loop
     for epoch in range(start_epoch, args.epochs):
