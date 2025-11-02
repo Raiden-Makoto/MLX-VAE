@@ -229,9 +229,6 @@ class ARCVAETrainerWithLoss:
         )
         
         for batch_idx, (molecules, conditions) in enumerate(pbar):
-            # Evaluate inputs
-            mx.eval(molecules, conditions)
-            
             # Compute loss and gradients (single forward pass)
             loss, grads = loss_and_grad_fn(
                 self.encoder,
@@ -240,14 +237,11 @@ class ARCVAETrainerWithLoss:
                 conditions
             )
             
-            # Evaluate gradients
-            mx.eval(grads)
-            
-            # Gradient clipping
-            clipped_grads = self._clip_gradients(grads, self.grad_clip)
-            
-            # Evaluate clipped gradients
-            mx.eval(clipped_grads)
+            # Gradient clipping (if enabled)
+            if self.grad_clip > 0:
+                clipped_grads = self._clip_gradients(grads, self.grad_clip)
+            else:
+                clipped_grads = grads
             
             # Update encoder (grads[0])
             if clipped_grads is not None and len(clipped_grads) > 0:
@@ -257,21 +251,23 @@ class ARCVAETrainerWithLoss:
             if clipped_grads is not None and len(clipped_grads) > 1:
                 self.decoder_optimizer.update(self.decoder, clipped_grads[1])
             
+            # Evaluate everything at once (more efficient)
             mx.eval(
+                loss,
                 self.encoder.parameters(),
                 self.decoder.parameters(),
                 self.encoder_optimizer.state,
                 self.decoder_optimizer.state
             )
             
-            # Evaluate and accumulate total loss only
-            mx.eval(loss)
+            # Accumulate loss
             loss_val = float(loss)
             total_loss += loss_val
             num_batches += 1
             
-            # Update progress bar with current loss
-            pbar.set_postfix({'loss': f'{loss_val:.4f}'})
+            # Update progress bar less frequently
+            if batch_idx % 10 == 0:
+                pbar.set_postfix({'loss': f'{loss_val:.4f}'})
         
         return {
             'loss': total_loss / num_batches,
@@ -311,12 +307,8 @@ class ARCVAETrainerWithLoss:
             desc="Validating"
         )
         
-        for molecules, conditions in pbar:
-            mx.eval(molecules, conditions)
-            
+        for batch_idx, (molecules, conditions) in enumerate(pbar):
             # Get loss dict (no teacher forcing during validation)
-            self.decoder.teacher_forcing_ratio = 0.0
-            
             loss_dict = complete_vae_loss(
                 encoder=self.encoder,
                 decoder=self.decoder,
@@ -331,6 +323,7 @@ class ARCVAETrainerWithLoss:
                 lambda_mi=self.lambda_mi
             )
             
+            # Evaluate all at once
             mx.eval(
                 loss_dict['total_loss'],
                 loss_dict['recon_loss'],
@@ -357,7 +350,7 @@ class ARCVAETrainerWithLoss:
     @staticmethod
     def _clip_gradients(grads, max_norm: float = 1.0) -> Tuple:
         """
-        Clip gradients by global norm
+        Clip gradients by global norm (fast implementation)
         
         Args:
             grads: Gradients tuple
@@ -366,32 +359,28 @@ class ARCVAETrainerWithLoss:
         Returns:
             Clipped gradients
         """
-        def compute_grad_norm(g):
+        # Fast implementation: compute norm in one pass without intermediate evals
+        total_norm_sq = mx.array(0.0)
+        for g in grads:
             if isinstance(g, dict):
-                norm_sq = 0.0
                 for v in g.values():
                     if isinstance(v, mx.array):
-                        norm_sq += mx.sum(mx.square(v))
-                return mx.sqrt(norm_sq)
-            return mx.array(0.0)
+                        total_norm_sq = total_norm_sq + mx.sum(mx.square(v))
         
-        # Compute norms for each component
-        norms = []
-        for g in grads:
-            norms.append(compute_grad_norm(g))
+        total_norm = mx.sqrt(total_norm_sq)
+        mx.eval(total_norm)
+        norm_val = float(total_norm)
         
-        global_norm = mx.sqrt(mx.sum(mx.stack(norms) ** 2))
-        mx.eval(global_norm)
-        global_norm_val = float(global_norm)
+        # Only scale if norm exceeds threshold
+        if norm_val > max_norm:
+            scale = max_norm / (norm_val + 1e-8)
+            def scale_grads(g):
+                if isinstance(g, dict):
+                    return {k: v * scale if isinstance(v, mx.array) else v for k, v in g.items()}
+                return g
+            return tuple(scale_grads(g) for g in grads)
         
-        scale = min(1.0, max_norm / (global_norm_val + 1e-8))
-        
-        def scale_grads(g):
-            if isinstance(g, dict):
-                return {k: v * scale if isinstance(v, mx.array) else v for k, v in g.items()}
-            return g
-        
-        return tuple(scale_grads(g) for g in grads)
+        return grads
     
     def _get_latent_stats(self) -> Tuple[mx.array, mx.array]:
         """Get latent statistics on small batch for monitoring"""
