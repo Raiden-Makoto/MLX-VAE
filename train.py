@@ -46,6 +46,8 @@ def main():
                         help='Checkpoint directory')
     parser.add_argument('--checkpoint_freq', type=int, default=10,
                         help='Checkpoint frequency (epochs)')
+    parser.add_argument('--verbose', action='store_true',
+                        help='Print detailed epoch summaries')
     parser.add_argument('--train_split', type=float, default=0.8,
                         help='Training set fraction')
     parser.add_argument('--val_split', type=float, default=0.1,
@@ -195,14 +197,7 @@ def main():
         print(f"✓ Loaded checkpoint from epoch {loaded_epoch}")
     
     # Training loop
-    print("\n" + "=" * 80)
-    print("Training")
-    print("=" * 80)
-    
     for epoch in range(start_epoch, args.epochs):
-        print(f"\nEpoch {epoch + 1}/{args.epochs}")
-        print("-" * 80)
-        
         # Train one epoch
         metrics = trainer.train_epoch(epoch=epoch, total_epochs=args.epochs, val_dataset=val_dataset)
         
@@ -223,7 +218,7 @@ def main():
         trainer.history['learning_rate'].append(args.learning_rate)
         trainer.history['mutual_info'].append(metrics['mutual_info'])
         
-        # Save checkpoint
+        # Save checkpoint (silently unless verbose)
         is_best = metrics['val_loss'] < best_val_loss
         if is_best:
             best_val_loss = metrics['val_loss']
@@ -232,21 +227,14 @@ def main():
             trainer.save_checkpoint(epoch=epoch, is_best=is_best)
             trainer.save_history(args.checkpoint_dir)
         
-        # Print summary
-        print(f"\nEpoch {epoch + 1} Summary:")
-        print(f"  Train Loss: {metrics['train_loss']:.4f} (Recon: {metrics['train_recon']:.4f}, KL: {metrics['train_kl']:.4f})")
-        print(f"  Beta: {metrics['beta']:.4f}, Teacher Forcing: {metrics['teacher_forcing']:.4f}")
-        print(f"  Mutual Info: {metrics['mutual_info']:.4f}")
-    
-    print("\n" + "=" * 80)
-    print("Training complete!")
-    print("=" * 80)
+        # Print summary only if verbose
+        if args.verbose:
+            print(f"\nEpoch {epoch + 1}/{args.epochs}: Train Loss: {metrics['train_loss']:.4f}, Val Loss: {metrics['val_loss']:.4f}, Beta: {metrics['beta']:.4f}")
     
     # Save final plot
-    print("\nSaving training history plot...")
     trainer.plot_history(save_path=f"{args.checkpoint_dir}/training_history.png")
     
-    print(f"\nCheckpoints saved to: {args.checkpoint_dir}")
+    print("\n✓ Training complete! ✓")
 
 
 if __name__ == '__main__':
