@@ -31,7 +31,7 @@ def main():
     
     # Training arguments
     parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--beta_start', type=float, default=0.0, help='Initial beta value')
     parser.add_argument('--beta_end', type=float, default=0.4, help='Final beta value')
