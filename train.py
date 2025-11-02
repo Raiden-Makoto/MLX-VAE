@@ -53,9 +53,10 @@ def main():
     
     args = parser.parse_args()
     
-    # Validate splits
-    if abs(args.train_split + args.val_split + (1.0 - args.train_split - args.val_split) - 1.0) > 1e-6:
-        raise ValueError("Train, validation, and test splits must sum to 1.0")
+    # Fixed splits: 80/10/10
+    train_split = 0.8
+    val_split = 0.1
+    test_split = 0.1
     
     print("=" * 80)
     print("AR-CVAE Training")
@@ -65,7 +66,7 @@ def main():
     print(f"  Model: embedding={args.embedding_dim}, hidden={args.hidden_dim}, latent={args.latent_dim}")
     print(f"  Training: epochs={args.epochs}, batch_size={args.batch_size}, lr={args.learning_rate}")
     print(f"  Beta: start={args.beta_start}, end={args.beta_end}, warmup={args.beta_warmup_epochs}")
-    print(f"  Splits: train={args.train_split:.1f}, val={args.val_split:.1f}, test={1-args.train_split-args.val_split:.1f}")
+    print(f"  Splits: train={train_split:.1f}, val={val_split:.1f}, test={test_split:.1f}")
     print("=" * 80)
     
     # Set random seed (fixed to 67)
@@ -83,10 +84,10 @@ def main():
     indices = np.arange(len(sequences))
     np.random.shuffle(indices)
     
-    # Split into train/val/test
+    # Split into train/val/test (80/10/10)
     n_total = len(sequences)
-    n_train = int(args.train_split * n_total)
-    n_val = int(args.val_split * n_total)
+    n_train = int(train_split * n_total)
+    n_val = int(val_split * n_total)
     
     train_indices = indices[:n_train]
     val_indices = indices[n_train:n_train + n_val]
