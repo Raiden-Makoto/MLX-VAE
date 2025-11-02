@@ -30,6 +30,8 @@ class ARCVAETrainerWithLoss:
         beta_warmup_epochs: int = 100,
         lambda_prop: float = 0.1,
         lambda_collapse: float = 0.01,
+        free_bits: float = 0.5,
+        lambda_mi: float = 0.01,
         grad_clip: float = 1.0,
         checkpoint_dir: str = './checkpoints'
     ):
@@ -61,6 +63,8 @@ class ARCVAETrainerWithLoss:
         # Loss weights
         self.lambda_prop = lambda_prop
         self.lambda_collapse = lambda_collapse
+        self.free_bits = free_bits
+        self.lambda_mi = lambda_mi
         
         # Beta annealing
         self.beta_start = beta_start
@@ -106,7 +110,7 @@ class ARCVAETrainerWithLoss:
     def compute_teacher_forcing_ratio(self, epoch: int, total_epochs: int) -> float:
         """Compute teacher forcing ratio with decay"""
         progress = epoch / total_epochs
-        ratio = max(0.5, 0.9 - 0.4 * progress)
+        ratio = max(0.3, 0.7 - 0.4 * progress)  # Start at 0.7, decay to 0.3
         return float(ratio)
     
     def train_epoch(
@@ -205,7 +209,9 @@ class ARCVAETrainerWithLoss:
                 beta=beta,
                 lambda_prop=self.lambda_prop,
                 lambda_collapse=self.lambda_collapse,
-                teacher_forcing_ratio=teacher_forcing_ratio
+                teacher_forcing_ratio=teacher_forcing_ratio,
+                free_bits=self.free_bits,
+                lambda_mi=self.lambda_mi
             )
             
             return loss_dict['total_loss']
@@ -319,7 +325,10 @@ class ARCVAETrainerWithLoss:
                 conditions=conditions,
                 beta=beta,
                 lambda_prop=self.lambda_prop,
-                lambda_collapse=self.lambda_collapse
+                lambda_collapse=self.lambda_collapse,
+                teacher_forcing_ratio=0.0,
+                free_bits=self.free_bits,
+                lambda_mi=self.lambda_mi
             )
             
             mx.eval(

@@ -1,7 +1,7 @@
 import mlx.core as mx
 from losses.recon import reconstruction_loss
 from losses.kl import kl_divergence
-from losses.info import posterior_collapse
+from losses.info import posterior_collapse, mutual_information
 from losses.prop import property_prediction_loss
 
 def complete_vae_loss(
@@ -13,7 +13,9 @@ def complete_vae_loss(
     beta: float = 0.4,
     lambda_prop: float = 0.1,
     lambda_collapse: float = 0.01,
-    teacher_forcing_ratio: float = 0.9
+    teacher_forcing_ratio: float = 0.9,
+    free_bits: float = 0.5,
+    lambda_mi: float = 0.0
 ) -> dict:
     """
     Complete multi-component loss for full AR-CVAE training
@@ -41,11 +43,15 @@ def complete_vae_loss(
     # Reconstruction loss
     recon_loss = reconstruction_loss(logits, x, reduction='mean')
     
-    # KL divergence
-    kl_loss = kl_divergence(mu, logvar, reduction='mean')
+    # KL divergence with free bits constraint
+    kl_loss = kl_divergence(mu, logvar, reduction='mean', free_bits=free_bits)
     
     # Posterior collapse penalty
     collapse_penalty = posterior_collapse(mu, logvar, weight=lambda_collapse)
+    
+    # Mutual information penalty (negative to encourage higher MI)
+    mi = mutual_information(mu, logvar)
+    mi_penalty = -lambda_mi * mi  # Negative because we want to maximize MI
     
     # Property prediction loss (if predictor available)
     if property_predictor is not None:
@@ -59,7 +65,8 @@ def complete_vae_loss(
         recon_loss +
         beta * kl_loss +
         collapse_penalty +
-        lambda_prop * prop_loss
+        lambda_prop * prop_loss +
+        mi_penalty
     )
     
     return {
@@ -70,6 +77,8 @@ def complete_vae_loss(
         'collapse_penalty': collapse_penalty,
         'prop_loss': prop_loss,
         'weighted_prop_loss': lambda_prop * prop_loss,
+        'mutual_info': mi,
+        'mi_penalty': mi_penalty,
         'mu': mu,
         'logvar': logvar,
         'z': z

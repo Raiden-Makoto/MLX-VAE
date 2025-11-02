@@ -36,9 +36,11 @@ def main():
     parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate')
     parser.add_argument('--beta_start', type=float, default=0.0, help='Initial beta value')
     parser.add_argument('--beta_end', type=float, default=0.4, help='Final beta value')
-    parser.add_argument('--beta_warmup_epochs', type=int, default=100, help='Beta warmup epochs')
+    parser.add_argument('--beta_warmup_epochs', type=int, default=20, help='Beta warmup epochs')
     parser.add_argument('--lambda_prop', type=float, default=0.1, help='Property loss weight')
-    parser.add_argument('--lambda_collapse', type=float, default=0.01, help='Posterior collapse weight')
+    parser.add_argument('--lambda_collapse', type=float, default=0.1, help='Posterior collapse weight')
+    parser.add_argument('--free_bits', type=float, default=0.5, help='Free bits constraint (min KL per dimension)')
+    parser.add_argument('--lambda_mi', type=float, default=0.01, help='Mutual information penalty weight')
     parser.add_argument('--grad_clip', type=float, default=1.0, help='Gradient clipping norm')
     
     # Output arguments
@@ -179,6 +181,8 @@ def main():
         beta_warmup_epochs=args.beta_warmup_epochs,
         lambda_prop=args.lambda_prop,
         lambda_collapse=args.lambda_collapse,
+        free_bits=args.free_bits,
+        lambda_mi=args.lambda_mi,
         grad_clip=args.grad_clip,
         checkpoint_dir=args.checkpoint_dir
     )
