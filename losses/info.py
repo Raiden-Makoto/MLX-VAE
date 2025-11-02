@@ -36,7 +36,7 @@ def mutual_information(mu: mx.array, logvar: mx.array) -> mx.array:
     agg_kl = -0.5 * mx.sum(1.0 + mean_logvar - mx.square(mean_mu) - mean_var)
     
     # Mutual information
-    mi = mean_kl - agg_kl / batch_size
+    mi = mean_kl - agg_kl
     
     return mi
 

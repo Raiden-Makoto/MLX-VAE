@@ -65,8 +65,7 @@ def complete_vae_loss(
         recon_loss +
         beta * kl_loss +
         collapse_penalty +
-        lambda_prop * prop_loss +
-        mi_penalty
+        lambda_prop * prop_loss
     )
     
     return {
