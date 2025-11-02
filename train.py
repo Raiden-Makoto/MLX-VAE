@@ -48,14 +48,8 @@ def main():
                         help='Checkpoint frequency (epochs)')
     parser.add_argument('--verbose', action='store_true',
                         help='Print detailed epoch summaries')
-    parser.add_argument('--train_split', type=float, default=0.8,
-                        help='Training set fraction')
-    parser.add_argument('--val_split', type=float, default=0.1,
-                        help='Validation set fraction')
-    parser.add_argument('--seed', type=int, default=42,
-                        help='Random seed for reproducibility')
     parser.add_argument('--resume', type=str, default=None,
-                        help='Path to checkpoint to resume from (if not specified, clears old checkpoints)')
+                        help='Path to checkpoint folder to resume from (if not specified, clears old checkpoints)')
     
     args = parser.parse_args()
     
@@ -74,8 +68,8 @@ def main():
     print(f"  Splits: train={args.train_split:.1f}, val={args.val_split:.1f}, test={1-args.train_split-args.val_split:.1f}")
     print("=" * 80)
     
-    # Set random seed
-    np.random.seed(args.seed)
+    # Set random seed (fixed to 67)
+    np.random.seed(67)
     
     # Load dataset
     print("\nLoading dataset...")
