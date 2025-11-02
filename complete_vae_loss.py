@@ -49,7 +49,7 @@ def complete_vae_loss(
     # Property prediction loss (if predictor available)
     if property_predictor is not None:
         pred_properties = property_predictor(z)
-        prop_loss = property_prediction_loss(z, pred_properties, conditions, reduction='mean')
+        prop_loss = property_prediction_loss(pred_properties, conditions, reduction='mean')
     else:
         prop_loss = mx.array(0.0)
     
