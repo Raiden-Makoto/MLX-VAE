@@ -195,6 +195,8 @@ def main():
     
     # Training loop
     for epoch in range(start_epoch, args.epochs):
+        print(f"\nEpoch {epoch + 1}/{args.epochs}")
+        
         # Train one epoch
         metrics = trainer.train_epoch(epoch=epoch, total_epochs=args.epochs, val_dataset=val_dataset)
         
