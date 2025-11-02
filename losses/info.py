@@ -28,11 +28,18 @@ def mutual_information(mu: mx.array, logvar: mx.array) -> mx.array:
     mean_kl = mx.mean(kl_per_sample)
     
     # Aggregated posterior KL
+    # The aggregated posterior q(z) = E_x[q(z|x)] is approximated by:
+    # mean_mu = E_x[mu], mean_var = E_x[var], where we need E_x[log var] for the KL
     mean_mu = mx.mean(mu, axis=0)
-    mean_var = mx.mean(var, axis=0)
-    mean_logvar = mx.log(mean_var)
     
-    # KL of aggregated
+    # Use mean variance (not log of mean variance) for aggregated posterior
+    # This is a standard approximation when variance is stationary
+    mean_var = mx.mean(var, axis=0)
+    
+    # For numerical stability, add small epsilon before taking log
+    mean_logvar = mx.log(mean_var + 1e-8)
+    
+    # KL of aggregated posterior to prior
     agg_kl = -0.5 * mx.sum(1.0 + mean_logvar - mx.square(mean_mu) - mean_var)
     
     # Mutual information

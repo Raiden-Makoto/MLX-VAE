@@ -108,6 +108,9 @@ class MLXEncoder(nn.Module):
         mu = self.fc_mu(combined)  # [batch_size, latent_dim]
         logvar = self.fc_logvar(combined)  # [batch_size, latent_dim]
         
+        # Clamp logvar to prevent numerical instability
+        logvar = mx.clip(logvar, -10.0, 10.0)
+        
         return mu, logvar
     
     @staticmethod
