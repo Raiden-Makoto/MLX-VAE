@@ -53,9 +53,7 @@ def main():
     parser.add_argument('--seed', type=int, default=42,
                         help='Random seed for reproducibility')
     parser.add_argument('--resume', type=str, default=None,
-                        help='Path to checkpoint to resume from')
-    parser.add_argument('--clear_checkpoints', action='store_true',
-                        help='Clear old checkpoints before starting')
+                        help='Path to checkpoint to resume from (if not specified, clears old checkpoints)')
     
     args = parser.parse_args()
     
@@ -144,16 +142,17 @@ def main():
         
         print(f"  Resuming from epoch {start_epoch}")
         print(f"  Best validation loss so far: {best_val_loss:.4f}")
-    elif args.clear_checkpoints and checkpoint_dir.exists():
-        # Clear old checkpoints and plots
-        print(f"\nClearing old checkpoints in {checkpoint_dir}")
-        for checkpoint_file in checkpoint_dir.glob("*.npz"):
-            checkpoint_file.unlink()
-        # Clear training history plot
-        history_plot = checkpoint_dir / "training_history.png"
-        if history_plot.exists():
-            history_plot.unlink()
-        print("✓ Cleared old checkpoints")
+    else:
+        # Clear old checkpoints unless resuming
+        if checkpoint_dir.exists():
+            print(f"\nClearing old checkpoints in {checkpoint_dir}")
+            for checkpoint_file in checkpoint_dir.glob("*.npz"):
+                checkpoint_file.unlink()
+            # Clear training history plot
+            history_plot = checkpoint_dir / "training_history.png"
+            if history_plot.exists():
+                history_plot.unlink()
+            print("✓ Cleared old checkpoints")
     
     # Create VAE model
     print("\nCreating VAE model...")
