@@ -12,7 +12,8 @@ def complete_vae_loss(
     conditions: mx.array,
     beta: float = 0.4,
     lambda_prop: float = 0.1,
-    lambda_collapse: float = 0.01
+    lambda_collapse: float = 0.01,
+    teacher_forcing_ratio: float = 0.9
 ) -> dict:
     """
     Complete multi-component loss for full AR-CVAE training
@@ -35,7 +36,7 @@ def complete_vae_loss(
     z = encoder.reparameterize(mu, logvar)
     
     # Decoding with teacher forcing
-    logits = decoder(z, conditions, target_seq=x, teacher_forcing_ratio=0.9)
+    logits = decoder(z, conditions, target_seq=x, teacher_forcing_ratio=teacher_forcing_ratio)
     
     # Reconstruction loss
     recon_loss = reconstruction_loss(logits, x, reduction='mean')

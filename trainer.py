@@ -185,10 +185,6 @@ class ARCVAETrainerWithLoss:
             Average losses for the epoch
         """
         total_loss = 0.0
-        total_recon = 0.0
-        total_kl = 0.0
-        total_collapse = 0.0
-        total_prop = 0.0
         num_batches = 0
         
         # Create loss function with decoder teacher forcing
@@ -207,7 +203,8 @@ class ARCVAETrainerWithLoss:
                 conditions=conditions,
                 beta=beta,
                 lambda_prop=self.lambda_prop,
-                lambda_collapse=self.lambda_collapse
+                lambda_collapse=self.lambda_collapse,
+                teacher_forcing_ratio=teacher_forcing_ratio
             )
             
             return loss_dict['total_loss']
@@ -224,36 +221,12 @@ class ARCVAETrainerWithLoss:
             # Evaluate inputs
             mx.eval(molecules, conditions)
             
-            # Update decoder's teacher forcing
-            self.decoder.teacher_forcing_ratio = teacher_forcing_ratio
-            
-            # Compute loss and gradients
+            # Compute loss and gradients (single forward pass)
             loss, grads = loss_and_grad_fn(
                 self.encoder,
                 self.decoder,
                 molecules,
                 conditions
-            )
-            
-            mx.eval(loss)
-            
-            # Get full loss breakdown
-            loss_dict = complete_vae_loss(
-                encoder=self.encoder,
-                decoder=self.decoder,
-                property_predictor=self.property_predictor,
-                x=molecules,
-                conditions=conditions,
-                beta=beta,
-                lambda_prop=self.lambda_prop,
-                lambda_collapse=self.lambda_collapse
-            )
-            
-            mx.eval(
-                loss_dict['recon_loss'],
-                loss_dict['kl_loss'],
-                loss_dict['collapse_penalty'],
-                loss_dict['prop_loss']
             )
             
             # Evaluate gradients
@@ -280,32 +253,25 @@ class ARCVAETrainerWithLoss:
                 self.decoder_optimizer.state
             )
             
-            # Accumulate losses
+            # Evaluate and accumulate total loss only
+            mx.eval(loss)
             total_loss += float(loss)
-            total_recon += float(loss_dict['recon_loss'])
-            total_kl += float(loss_dict['kl_loss'])
-            total_collapse += float(loss_dict['collapse_penalty'])
-            total_prop += float(loss_dict['prop_loss'])
             num_batches += 1
             
             # Progress
             if (batch_idx + 1) % max(1, num_batches_total // 10) == 0:
                 avg_loss = total_loss / num_batches
-                avg_recon = total_recon / num_batches
-                avg_kl = total_kl / num_batches
                 print(
                     f"    Batch {batch_idx + 1}/{num_batches_total} | "
-                    f"Loss: {avg_loss:.4f} | "
-                    f"Recon: {avg_recon:.4f} | "
-                    f"KL: {avg_kl:.4f}"
+                    f"Loss: {avg_loss:.4f}"
                 )
         
         return {
             'loss': total_loss / num_batches,
-            'recon': total_recon / num_batches,
-            'kl': total_kl / num_batches,
-            'collapse': total_collapse / num_batches,
-            'prop': total_prop / num_batches
+            'recon': 0.0,  # Not computed for speed
+            'kl': 0.0,
+            'collapse': 0.0,
+            'prop': 0.0
         }
     
     def _validate(
