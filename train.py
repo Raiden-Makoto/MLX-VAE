@@ -47,8 +47,18 @@ def main():
                         help='Checkpoint frequency (epochs)')
     parser.add_argument('--plot_freq', type=int, default=5,
                         help='Plot frequency (epochs)')
+    parser.add_argument('--train_split', type=float, default=0.8,
+                        help='Training set fraction')
+    parser.add_argument('--val_split', type=float, default=0.1,
+                        help='Validation set fraction')
+    parser.add_argument('--seed', type=int, default=42,
+                        help='Random seed for reproducibility')
     
     args = parser.parse_args()
+    
+    # Validate splits
+    if abs(args.train_split + args.val_split + (1.0 - args.train_split - args.val_split) - 1.0) > 1e-6:
+        raise ValueError("Train, validation, and test splits must sum to 1.0")
     
     print("=" * 80)
     print("AR-CVAE Training")
@@ -58,7 +68,11 @@ def main():
     print(f"  Model: embedding={args.embedding_dim}, hidden={args.hidden_dim}, latent={args.latent_dim}")
     print(f"  Training: epochs={args.epochs}, batch_size={args.batch_size}, lr={args.learning_rate}")
     print(f"  Beta: start={args.beta_start}, end={args.beta_end}, warmup={args.beta_warmup_epochs}")
+    print(f"  Splits: train={args.train_split:.1f}, val={args.val_split:.1f}, test={1-args.train_split-args.val_split:.1f}")
     print("=" * 80)
+    
+    # Set random seed
+    np.random.seed(args.seed)
     
     # Load dataset
     print("\nLoading dataset...")
@@ -66,13 +80,47 @@ def main():
         data = json.load(f)
     
     properties = np.array([[mol['tpsa']] for mol in data['molecules']], dtype=np.float32)
-    dataset = MoleculeDataset(
-        tokenized_molecules=data['tokenized_sequences'],
-        properties=properties,
+    sequences = data['tokenized_sequences']
+    
+    # Shuffle data with seed
+    indices = np.arange(len(sequences))
+    np.random.shuffle(indices)
+    
+    # Split into train/val/test
+    n_total = len(sequences)
+    n_train = int(args.train_split * n_total)
+    n_val = int(args.val_split * n_total)
+    
+    train_indices = indices[:n_train]
+    val_indices = indices[n_train:n_train + n_val]
+    test_indices = indices[n_train + n_val:]
+    
+    # Create datasets
+    train_dataset = MoleculeDataset(
+        tokenized_molecules=[sequences[i] for i in train_indices],
+        properties=properties[train_indices],
         max_length=data['max_length'],
         pad_token=0
     )
-    print(f"✓ Loaded {len(dataset):,} samples")
+    
+    val_dataset = MoleculeDataset(
+        tokenized_molecules=[sequences[i] for i in val_indices],
+        properties=properties[val_indices],
+        max_length=data['max_length'],
+        pad_token=0
+    )
+    
+    test_dataset = MoleculeDataset(
+        tokenized_molecules=[sequences[i] for i in test_indices],
+        properties=properties[test_indices],
+        max_length=data['max_length'],
+        pad_token=0
+    )
+    
+    print(f"✓ Loaded {n_total:,} samples")
+    print(f"  - Training: {len(train_dataset):,} samples")
+    print(f"  - Validation: {len(val_dataset):,} samples")
+    print(f"  - Test: {len(test_dataset):,} samples")
     
     # Create VAE model
     print("\nCreating VAE model...")
@@ -93,7 +141,7 @@ def main():
         encoder=vae.encoder,
         decoder=vae.decoder,
         property_predictor=None,  # TODO: Add property predictor
-        dataset=dataset,
+        dataset=train_dataset,
         batch_size=args.batch_size,
         learning_rate=args.learning_rate,
         beta_start=args.beta_start,
@@ -118,7 +166,7 @@ def main():
         print("-" * 80)
         
         # Train one epoch
-        metrics = trainer.train_epoch(epoch=epoch, total_epochs=args.epochs)
+        metrics = trainer.train_epoch(epoch=epoch, total_epochs=args.epochs, val_dataset=val_dataset)
         
         # Store metrics
         trainer.history['epoch'].append(epoch)
