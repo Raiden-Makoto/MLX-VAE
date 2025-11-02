@@ -10,6 +10,7 @@ from .enc import encoder_loss
 from .dec import decoder_loss
 from .info import mutual_information, posterior_collapse
 from .prop import property_prediction_loss
+from .complete import complete_vae_loss
 
 __all__ = [
     'reconstruction_loss', 
@@ -20,6 +21,7 @@ __all__ = [
     'decoder_loss',
     'mutual_information',
     'posterior_collapse',
-    'property_prediction_loss'
+    'property_prediction_loss',
+    'complete_vae_loss'
 ]
 
