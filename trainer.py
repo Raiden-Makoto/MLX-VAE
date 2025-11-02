@@ -5,6 +5,7 @@ import numpy as np
 from typing import Dict, Tuple, Optional, Callable
 import json
 from pathlib import Path
+from tqdm import tqdm
 from complete_vae_loss import complete_vae_loss
 
 
@@ -212,12 +213,16 @@ class ARCVAETrainerWithLoss:
         # Create gradient function
         loss_and_grad_fn = mx.value_and_grad(model_loss_fn, argnums=[0, 1])
         
-        print(f"  Training batches...")
         num_batches_total = len(self.dataset) // self.batch_size
         
-        for batch_idx, (molecules, conditions) in enumerate(
-            self.dataset.to_batches(self.batch_size, shuffle=True)
-        ):
+        # Use tqdm for progress bar
+        pbar = tqdm(
+            self.dataset.to_batches(self.batch_size, shuffle=True),
+            total=num_batches_total,
+            desc="Training batches"
+        )
+        
+        for batch_idx, (molecules, conditions) in enumerate(pbar):
             # Evaluate inputs
             mx.eval(molecules, conditions)
             
@@ -255,16 +260,12 @@ class ARCVAETrainerWithLoss:
             
             # Evaluate and accumulate total loss only
             mx.eval(loss)
-            total_loss += float(loss)
+            loss_val = float(loss)
+            total_loss += loss_val
             num_batches += 1
             
-            # Progress
-            if (batch_idx + 1) % max(1, num_batches_total // 10) == 0:
-                avg_loss = total_loss / num_batches
-                print(
-                    f"    Batch {batch_idx + 1}/{num_batches_total} | "
-                    f"Loss: {avg_loss:.4f}"
-                )
+            # Update progress bar with current loss
+            pbar.set_postfix({'loss': f'{loss_val:.4f}'})
         
         return {
             'loss': total_loss / num_batches,
@@ -296,9 +297,15 @@ class ARCVAETrainerWithLoss:
         total_prop = 0.0
         num_batches = 0
         
-        print(f"  Validating...")
+        val_batches = len(val_dataset) // self.batch_size
         
-        for molecules, conditions in val_dataset.to_batches(self.batch_size, shuffle=False):
+        pbar = tqdm(
+            val_dataset.to_batches(self.batch_size, shuffle=False),
+            total=val_batches,
+            desc="Validating"
+        )
+        
+        for molecules, conditions in pbar:
             mx.eval(molecules, conditions)
             
             # Get loss dict (no teacher forcing during validation)
