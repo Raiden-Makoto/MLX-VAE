@@ -46,8 +46,6 @@ def main():
                         help='Checkpoint directory')
     parser.add_argument('--checkpoint_freq', type=int, default=10,
                         help='Checkpoint frequency (epochs)')
-    parser.add_argument('--plot_freq', type=int, default=5,
-                        help='Plot frequency (epochs)')
     parser.add_argument('--train_split', type=float, default=0.8,
                         help='Training set fraction')
     parser.add_argument('--val_split', type=float, default=0.1,
@@ -147,12 +145,14 @@ def main():
         print(f"  Resuming from epoch {start_epoch}")
         print(f"  Best validation loss so far: {best_val_loss:.4f}")
     elif args.clear_checkpoints and checkpoint_dir.exists():
-        # Clear old checkpoints
+        # Clear old checkpoints and plots
         print(f"\nClearing old checkpoints in {checkpoint_dir}")
         for checkpoint_file in checkpoint_dir.glob("*.npz"):
             checkpoint_file.unlink()
-        for plot_file in checkpoint_dir.glob("history_*.png"):
-            plot_file.unlink()
+        # Clear training history plot
+        history_plot = checkpoint_dir / "training_history.png"
+        if history_plot.exists():
+            history_plot.unlink()
         print("✓ Cleared old checkpoints")
     
     # Create VAE model
@@ -233,10 +233,6 @@ def main():
             trainer.save_checkpoint(epoch=epoch, is_best=is_best)
             trainer.save_history(args.checkpoint_dir)
         
-        # Plot history
-        if (epoch + 1) % args.plot_freq == 0:
-            trainer.plot_history(save_path=f"{args.checkpoint_dir}/history_epoch_{epoch + 1}.png")
-        
         # Print summary
         print(f"\nEpoch {epoch + 1} Summary:")
         print(f"  Train Loss: {metrics['train_loss']:.4f} (Recon: {metrics['train_recon']:.4f}, KL: {metrics['train_kl']:.4f})")
@@ -246,6 +242,11 @@ def main():
     print("\n" + "=" * 80)
     print("Training complete!")
     print("=" * 80)
+    
+    # Save final plot
+    print("\nSaving training history plot...")
+    trainer.plot_history(save_path=f"{args.checkpoint_dir}/training_history.png")
+    
     print(f"\nCheckpoints saved to: {args.checkpoint_dir}")
 
 
