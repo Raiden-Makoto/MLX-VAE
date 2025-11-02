@@ -1,10 +1,8 @@
 import mlx.core as mx
-import mlx.nn as nn
-import numpy as np
-from .recon import reconstruction_loss
-from .kl import kl_divergence
-from .info import posterior_collapse
-from .prop import property_prediction_loss
+from losses.recon import reconstruction_loss
+from losses.kl import kl_divergence
+from losses.info import posterior_collapse
+from losses.prop import property_prediction_loss
 
 def complete_vae_loss(
     encoder,
