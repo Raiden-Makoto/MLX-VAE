@@ -49,7 +49,7 @@ class MLXAutoregressiveDecoderSampling(nn.Module):
         self,
         z: mx.array,
         conditions: mx.array,
-        max_length: int = 120,
+        max_length: int = 80,
         temperature: float = 1.0,
         early_stopping: bool = True
     ) -> mx.array:

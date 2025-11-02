@@ -102,7 +102,7 @@ class ARCVAE(nn.Module):
         self,
         batch_size: int,
         conditions: mx.array,
-        max_length: int = 120,
+        max_length: int = 80,
         temperature: float = 1.0
     ) -> mx.array:
         """

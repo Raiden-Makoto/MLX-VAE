@@ -114,7 +114,7 @@ class MLXAutoregressiveDecoder(nn.Module):
         z: mx.array,
         conditions: mx.array,
         target_seq: Optional[mx.array] = None,
-        max_length: int = 120,
+        max_length: int = 80,
         teacher_forcing_ratio: float = 0.5
     ) -> mx.array:
         """
