@@ -64,7 +64,14 @@ class MLXEncoder(nn.Module):
         # Combined dimension: hidden_dim (from LSTM) + hidden_dim (from conditions)
         combined_dim = hidden_dim + hidden_dim
         self.fc_mu = nn.Linear(combined_dim, latent_dim)
+        # Two-layer projection for logvar for stability
+        self.fc_logvar_hidden = nn.Linear(combined_dim, combined_dim)
         self.fc_logvar = nn.Linear(combined_dim, latent_dim)
+        # Initialize logvar bias to start with modest variance (logvar ≈ -2.5)
+        if hasattr(self.fc_logvar, 'bias'):
+            # Initialize to target logvar around -2.0 (variance ~ 0.135)
+            # Solve tanh(b)*6 - 4 ≈ -2  => tanh(b) ≈ 1/3 => b ≈ 0.3466
+            self.fc_logvar.bias = mx.ones_like(self.fc_logvar.bias) * 0.35
         
     def __call__(
         self,
@@ -104,12 +111,23 @@ class MLXEncoder(nn.Module):
         # Concatenate sequence representation with condition representation
         combined = mx.concatenate([final_hidden, condition_repr], axis=1)  # [batch_size, 2*hidden_dim]
         
-        # Compute latent parameters
-        mu = self.fc_mu(combined)  # [batch_size, latent_dim]
-        logvar = self.fc_logvar(combined)  # [batch_size, latent_dim]
+        # Compute latent parameters (raw, unbounded)
+        mu_raw = self.fc_mu(combined)  # [batch_size, latent_dim]
+        # Two-layer logvar projection for smoother mapping
+        logvar_hidden = mx.tanh(self.fc_logvar_hidden(combined))
+        logvar_raw = self.fc_logvar(logvar_hidden)  # [batch_size, latent_dim]
         
-        # Clamp logvar to prevent numerical instability
-        logvar = mx.clip(logvar, -10.0, 10.0)
+        # CRITICAL: Bound outputs using tanh for smooth, bounded gradients
+        # tanh provides natural bounds and maintains gradients everywhere
+        # 
+        # μ: Use tanh with scaling to get [-2, 2] range
+        #    This gives μ² ∈ [0, 4] per dimension (safe)
+        #    For 128 dims: max sum(μ²) = 512 (very reasonable)
+        mu = mx.tanh(mu_raw / 2.0) * 2.0  # Range: [-2, 2]
+        
+        # logvar: Bound tightly to [-2, 0] to keep variance in [0.135, 1.0]
+        # This prevents tiny variances that explode KL
+        logvar = mx.tanh(logvar_raw / 2.0) * 1.0 - 1.0  # Range: [-2, 0]
         
         return mu, logvar
     

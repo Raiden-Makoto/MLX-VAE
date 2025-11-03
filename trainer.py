@@ -191,6 +191,12 @@ class ARCVAETrainerWithLoss:
         """
         total_loss = 0.0
         num_batches = 0
+        # For component tracking (sampled periodically to reduce cost)
+        recon_sum = 0.0
+        kl_sum = 0.0
+        collapse_sum = 0.0
+        prop_sum = 0.0
+        comp_count = 0
         
         # Create loss function with decoder teacher forcing
         def model_loss_fn(encoder, decoder, x, conditions):
@@ -211,7 +217,8 @@ class ARCVAETrainerWithLoss:
                 lambda_collapse=self.lambda_collapse,
                 teacher_forcing_ratio=teacher_forcing_ratio,
                 free_bits=self.free_bits,
-                lambda_mi=self.lambda_mi
+                lambda_mi=self.lambda_mi,
+                target_mi=4.85  # Standard target MI value
             )
             
             return loss_dict['total_loss']
@@ -260,8 +267,133 @@ class ARCVAETrainerWithLoss:
                 self.decoder_optimizer.state
             )
             
+            # Get full loss breakdown for diagnostics (first batch of epoch and periodically)
+            if batch_idx == 0 or batch_idx % 25 == 0:
+                loss_dict = complete_vae_loss(
+                    encoder=self.encoder,
+                    decoder=self.decoder,
+                    property_predictor=self.property_predictor,
+                    x=molecules,
+                    conditions=conditions,
+                    beta=beta,
+                    lambda_prop=self.lambda_prop,
+                    lambda_collapse=self.lambda_collapse,
+                    teacher_forcing_ratio=teacher_forcing_ratio,
+                    free_bits=self.free_bits,
+                    lambda_mi=self.lambda_mi,
+                    target_mi=4.85
+                )
+                mx.eval(loss_dict.values())
+                
+                recon = float(loss_dict['recon_loss'])
+                kl = float(loss_dict['kl_loss'])
+                weighted_kl = float(beta * loss_dict['kl_loss'])
+                collapse = float(loss_dict['collapse_penalty'])
+                prop = float(loss_dict['prop_loss'])
+                mi_val = float(loss_dict['mutual_info'])
+                mi_penalty = float(loss_dict['mi_penalty'])
+                total = float(loss_dict['total_loss'])
+
+                # Accumulate sampled components
+                recon_sum += recon
+                kl_sum += kl
+                collapse_sum += collapse
+                prop_sum += prop
+                comp_count += 1
+                
+                # CRITICAL: Check for sign errors (negative losses are WRONG)
+                issues = []
+                if recon < 0:
+                    issues.append(f"❌ Recon loss is NEGATIVE: {recon:.4f} (should be ≥ 0)")
+                if kl < 0:
+                    issues.append(f"❌ KL loss is NEGATIVE: {kl:.4f} (should be ≥ 0)")
+                if collapse < 0:
+                    issues.append(f"⚠️  Collapse penalty is negative: {collapse:.4f}")
+                if total < 0:
+                    issues.append(f"❌ TOTAL LOSS is NEGATIVE: {total:.4f} (CRITICAL BUG!)")
+                
+                if batch_idx == 0:
+                    # 0) Inputs check
+                    print("\n" + "=" * 80)
+                    print("CHECKING LOSS FUNCTION INPUTS")
+                    print("=" * 80)
+                    print(f"     Property predictor present: {self.property_predictor is not None}")
+                    # Basic module presence checks
+                    has_fc_mu = hasattr(self.encoder, 'fc_mu')
+                    has_fc_out = hasattr(self.decoder, 'fc_out')
+                    print(f"     Encoder has fc_mu: {has_fc_mu}")
+                    print(f"     Decoder has fc_out: {has_fc_out}")
+
+                    # 1) Loss breakdown
+                    print(f"\n   Loss breakdown (batch 0):")
+                    print(f"     Recon: {recon:.4f} {'✅' if recon >= 0 else '❌ NEGATIVE!'}")
+                    print(f"     KL: {kl:.4f} {'✅' if kl >= 0 else '❌ NEGATIVE!'}")
+                    print(f"     Weighted KL (β={beta:.4f}×KL): {weighted_kl:.4f}")
+                    print(f"     Collapse penalty: {collapse:.4f}")
+                    print(f"     Property loss: {prop:.4f}")
+                    print(f"     MI: {mi_val:.4f}, MI penalty: {mi_penalty:.4f}")
+                    print(f"     TOTAL: {total:.4f} {'✅' if total >= 0 else '❌ NEGATIVE!'}")
+
+                    # Derived beta check
+                    derived_beta = weighted_kl / max(kl, 1e-8)
+                    print(f"\n     Derived β from (weighted_kl / kl): {derived_beta:.4f}")
+                    
+                    if issues:
+                        print(f"\n   ⚠️  CRITICAL ISSUES DETECTED:")
+                        for issue in issues:
+                            print(f"     {issue}")
+                        print(f"   → Check loss function formulas for sign errors!")
+
+                    # 2) Decoder forward pass diagnostic
+                    print(f"\n   Decoder forward pass diagnostic:")
+                    z_test = mx.random.normal((4, self.encoder.latent_dim))
+                    cond_dims = getattr(self.encoder, 'num_conditions', 1)
+                    cond_test = mx.zeros((4, cond_dims))
+                    logits_test = self.decoder(z_test, cond_test, target_seq=molecules[:4, :])
+                    mx.eval(z_test, logits_test)
+                    print(f"     z std: {float(mx.std(z_test)):.4f}")
+                    print(f"     logits range: [{float(mx.min(logits_test)):.4f}, {float(mx.max(logits_test)):.4f}]")
+                    print(f"     logits mean/std: {float(mx.mean(logits_test)):.4f}/{float(mx.std(logits_test)):.4f}")
+                    print("=" * 80)
+            
             # Accumulate loss
             loss_val = float(loss)
+            
+            # SANITY CHECK: Catch explosions and negative losses
+            if not np.isfinite(loss_val) or loss_val > 2000.0 or loss_val < -10.0:
+                print(f"\n⚠️  WARNING: Loss explosion detected at batch {batch_idx}!")
+                print(f"   Loss: {loss_val:.2e}")
+                # Get full breakdown for diagnostics
+                loss_dict = complete_vae_loss(
+                    encoder=self.encoder,
+                    decoder=self.decoder,
+                    property_predictor=self.property_predictor,
+                    x=molecules,
+                    conditions=conditions,
+                    beta=beta,
+                    lambda_prop=self.lambda_prop,
+                    lambda_collapse=self.lambda_collapse,
+                    teacher_forcing_ratio=teacher_forcing_ratio,
+                    free_bits=self.free_bits,
+                    lambda_mi=self.lambda_mi,
+                    target_mi=4.85
+                )
+                mx.eval(loss_dict.values())
+                
+                # Check latent parameter bounds
+                mu_max = float(mx.max(mx.abs(loss_dict['mu'])))
+                logvar_max = float(mx.max(loss_dict['logvar']))
+                logvar_min = float(mx.min(loss_dict['logvar']))
+                
+                print(f"   Components: recon={float(loss_dict['recon_loss']):.2f}, "
+                      f"kl={float(loss_dict['kl_loss']):.2f}, "
+                      f"weighted_kl={float(beta * loss_dict['kl_loss']):.2f}, "
+                      f"collapse={float(loss_dict['collapse_penalty']):.2f}")
+                print(f"   Latent bounds: |μ|_max={mu_max:.3f} (expected ≤2), "
+                      f"logvar=[{logvar_min:.3f}, {logvar_max:.3f}] (expected [-5, 2])")
+                print(f"   Skipping this batch...")
+                continue  # Skip this batch
+            
             total_loss += loss_val
             num_batches += 1
             
@@ -270,11 +402,11 @@ class ARCVAETrainerWithLoss:
                 pbar.set_postfix({'loss': f'{loss_val:.4f}'})
         
         return {
-            'loss': total_loss / num_batches,
-            'recon': 0.0,  # Not computed for speed
-            'kl': 0.0,
-            'collapse': 0.0,
-            'prop': 0.0
+            'loss': total_loss / max(1, num_batches),
+            'recon': (recon_sum / comp_count) if comp_count > 0 else 0.0,
+            'kl': (kl_sum / comp_count) if comp_count > 0 else 0.0,
+            'collapse': (collapse_sum / comp_count) if comp_count > 0 else 0.0,
+            'prop': (prop_sum / comp_count) if comp_count > 0 else 0.0
         }
     
     def _validate(
@@ -320,7 +452,8 @@ class ARCVAETrainerWithLoss:
                 lambda_collapse=self.lambda_collapse,
                 teacher_forcing_ratio=0.0,
                 free_bits=self.free_bits,
-                lambda_mi=self.lambda_mi
+                lambda_mi=self.lambda_mi,
+                target_mi=4.85
             )
             
             # Evaluate all at once
@@ -390,6 +523,19 @@ class ARCVAETrainerWithLoss:
         mu, logvar = self.encoder(molecules, conditions)
         mx.eval(mu, logvar)
         
+        # Log statistics for debugging
+        mu_mean = float(mx.mean(mu))
+        mu_std = float(mx.std(mu))
+        mu_max = float(mx.max(mu))
+        mu_min = float(mx.min(mu))
+        logvar_mean = float(mx.mean(logvar))
+        logvar_std = float(mx.std(logvar))
+        logvar_max = float(mx.max(logvar))
+        logvar_min = float(mx.min(logvar))
+        
+        print(f"   Latent Stats: μ=[{mu_min:.3f}, {mu_max:.3f}] (mean={mu_mean:.3f}, std={mu_std:.3f}), "
+              f"logvar=[{logvar_min:.3f}, {logvar_max:.3f}] (mean={logvar_mean:.3f}, std={logvar_std:.3f})")
+        
         return mu, logvar
     
     @staticmethod
@@ -402,6 +548,11 @@ class ARCVAETrainerWithLoss:
         """
         batch_size = mu.shape[0]
         
+        # Note: mu should be bounded to [-2, 2] via tanh, logvar to [-5, 2] via tanh by encoder
+        # Emergency clipping as defensive safeguard
+        mu = mx.clip(mu, -3.0, 3.0)
+        logvar = mx.clip(logvar, -6.0, 3.0)
+        
         var = mx.exp(logvar)
         kl_per_sample = -0.5 * mx.sum(1.0 + logvar - mx.square(mu) - var, axis=1)
         mean_kl = mx.mean(kl_per_sample)
@@ -412,7 +563,8 @@ class ARCVAETrainerWithLoss:
         
         agg_kl = -0.5 * mx.sum(1.0 + mean_logvar - mx.square(mean_mu) - mean_var)
         
-        mi = mean_kl - agg_kl / batch_size
+        mi = mean_kl - agg_kl
+        mi = mx.maximum(mi, 0.0)
         
         return mi
     

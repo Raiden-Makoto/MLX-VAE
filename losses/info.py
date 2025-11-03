@@ -22,28 +22,30 @@ def mutual_information(mu: mx.array, logvar: mx.array) -> mx.array:
     """
     batch_size = mu.shape[0]
     
+    # Note: mu should be bounded to [-2, 2] via tanh, logvar to [-5, 2] via tanh by encoder
+    # Emergency clipping as defensive safeguard
+    mu = mx.clip(mu, -3.0, 3.0)
+    logvar = mx.clip(logvar, -6.0, 3.0)
+    
     # Per-sample KL
     var = mx.exp(logvar)
     kl_per_sample = -0.5 * mx.sum(1.0 + logvar - mx.square(mu) - var, axis=1)
     mean_kl = mx.mean(kl_per_sample)
     
     # Aggregated posterior KL
-    # The aggregated posterior q(z) = E_x[q(z|x)] is approximated by:
-    # mean_mu = E_x[mu], mean_var = E_x[var], where we need E_x[log var] for the KL
     mean_mu = mx.mean(mu, axis=0)
-    
-    # Use mean variance (not log of mean variance) for aggregated posterior
-    # This is a standard approximation when variance is stationary
     mean_var = mx.mean(var, axis=0)
+    mean_logvar = mx.log(mean_var)
     
-    # For numerical stability, add small epsilon before taking log
-    mean_logvar = mx.log(mean_var + 1e-8)
-    
-    # KL of aggregated posterior to prior
+    # KL of aggregated
     agg_kl = -0.5 * mx.sum(1.0 + mean_logvar - mx.square(mean_mu) - mean_var)
     
-    # Mutual information
+    # Mutual information (batch estimate)
+    # Correct: I ≈ E_x[KL(q(z|x)||p(z))] - KL(q(z)||p(z))
+    # Do NOT divide the aggregated KL by batch size
     mi = mean_kl - agg_kl
+    # Ensure non-negative due to estimation noise
+    mi = mx.maximum(mi, 0.0)
     
     return mi
 

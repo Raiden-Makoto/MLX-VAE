@@ -5,7 +5,8 @@ from typing import Tuple, Optional
 
 
 class MLXAutoregressiveDecoder(nn.Module):
-    """Autoregressive decoder for AR-CVAE molecule generation using MLX
+    """
+    Autoregressive decoder for AR-CVAE molecule generation using MLX
     
     Generates molecules token-by-token, conditioning on:
     - Latent vector z
@@ -70,6 +71,7 @@ class MLXAutoregressiveDecoder(nn.Module):
         
         # Output projection to vocabulary
         self.fc_out = nn.Linear(hidden_dim, vocab_size)
+
     
     def initialize_hidden_state(
         self,

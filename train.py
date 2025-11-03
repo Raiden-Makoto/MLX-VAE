@@ -32,14 +32,14 @@ def main():
     
     # Training arguments
     parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=128, help='Batch size')
-    parser.add_argument('--learning_rate', type=float, default=1e-4, help='Learning rate')
+    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
+    parser.add_argument('--learning_rate', type=float, default=5e-5, help='Learning rate')
     parser.add_argument('--beta_start', type=float, default=0.0, help='Initial beta value')
-    parser.add_argument('--beta_end', type=float, default=0.4, help='Final beta value')
-    parser.add_argument('--beta_warmup_epochs', type=int, default=20, help='Beta warmup epochs')
+    parser.add_argument('--beta_end', type=float, default=0.05, help='Final beta value')
+    parser.add_argument('--beta_warmup_epochs', type=int, default=35, help='Beta warmup epochs')
     parser.add_argument('--lambda_prop', type=float, default=0.1, help='Property loss weight')
-    parser.add_argument('--lambda_collapse', type=float, default=0.1, help='Posterior collapse weight')
-    parser.add_argument('--free_bits', type=float, default=0.5, help='Free bits constraint (min KL per dimension)')
+    parser.add_argument('--lambda_collapse', type=float, default=0.001, help='Posterior collapse weight')
+    parser.add_argument('--free_bits', type=float, default=1.0, help='Free bits constraint (min KL per dimension)')
     parser.add_argument('--lambda_mi', type=float, default=0.01, help='Mutual information penalty weight')
     parser.add_argument('--grad_clip', type=float, default=1.0, help='Gradient clipping norm')
     
@@ -95,7 +95,7 @@ def main():
     val_indices = indices[n_train:n_train + n_val]
     test_indices = indices[n_train + n_val:]
     
-    # Create datasets
+    # Create TRAIN dataset first (computes normalization stats)
     train_dataset = MoleculeDataset(
         tokenized_molecules=[sequences[i] for i in train_indices],
         properties=properties[train_indices],
@@ -103,19 +103,30 @@ def main():
         pad_token=0
     )
     
+    # CRITICAL: Use train set's normalization stats for val and test
+    # This ensures all splits are normalized consistently
     val_dataset = MoleculeDataset(
         tokenized_molecules=[sequences[i] for i in val_indices],
         properties=properties[val_indices],
         max_length=data['max_length'],
-        pad_token=0
+        pad_token=0,
+        properties_mean=train_dataset.properties_mean,
+        properties_std=train_dataset.properties_std
     )
     
     test_dataset = MoleculeDataset(
         tokenized_molecules=[sequences[i] for i in test_indices],
         properties=properties[test_indices],
         max_length=data['max_length'],
-        pad_token=0
+        pad_token=0,
+        properties_mean=train_dataset.properties_mean,
+        properties_std=train_dataset.properties_std
     )
+    
+    # Print normalization info
+    print(f"✓ Property normalization (using train set stats):")
+    print(f"  Mean: {train_dataset.properties_mean.flatten()}")
+    print(f"  Std:  {train_dataset.properties_std.flatten()}")
     
     print(f"✓ Loaded {n_total:,} samples")
     print(f"  - Training: {len(train_dataset):,} samples")

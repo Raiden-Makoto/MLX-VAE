@@ -15,7 +15,8 @@ def complete_vae_loss(
     lambda_collapse: float = 0.01,
     teacher_forcing_ratio: float = 0.9,
     free_bits: float = 0.5,
-    lambda_mi: float = 0.0
+    lambda_mi: float = 0.0,
+    target_mi: float = 4.85
 ) -> dict:
     """
     Complete multi-component loss for full AR-CVAE training
@@ -49,9 +50,14 @@ def complete_vae_loss(
     # Posterior collapse penalty
     collapse_penalty = posterior_collapse(mu, logvar, weight=lambda_collapse)
     
-    # Mutual information penalty (negative to encourage higher MI)
+    # Mutual information penalty (positive, encourages higher MI)
+    # FIXED: Changed from -lambda_mi * mi (which can go negative) to:
+    #        lambda_mi * max(0, target_mi - mi) (always >= 0)
+    # This only penalizes when MI is below target, never rewards low MI
+    # When MI >= target_mi: penalty = 0 (no interference)
+    # When MI < target_mi: penalty > 0 (encourages higher MI)
     mi = mutual_information(mu, logvar)
-    mi_penalty = -lambda_mi * mi  # Negative because we want to maximize MI
+    mi_penalty = lambda_mi * mx.maximum(0.0, target_mi - mi)  # Always >= 0
     
     # Property prediction loss (if predictor available)
     if property_predictor is not None:
@@ -61,12 +67,21 @@ def complete_vae_loss(
         prop_loss = mx.array(0.0)
     
     # Total loss
+    # FIXED: All components are now guaranteed to be >= 0:
+    # - recon_loss >= 0 (cross-entropy)
+    # - kl_loss >= 0 (KL divergence with non-negativity check)
+    # - collapse_penalty >= 0 (max(0, target_mi - mi))
+    # - prop_loss >= 0 (MSE)
+    # - mi_penalty >= 0 (max(0, target_mi - mi))  # FIXED: No longer negative!
     total_loss = (
         recon_loss +
         beta * kl_loss +
         collapse_penalty +
-        lambda_prop * prop_loss
+        lambda_prop * prop_loss +
+        mi_penalty
     )
+    
+    # All components are now positive, so total_loss should always be >= 0
     
     return {
         'total_loss': total_loss,

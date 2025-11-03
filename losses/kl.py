@@ -34,12 +34,21 @@ def kl_divergence(
     """
     batch_size, latent_dim = mu.shape
     
+    # Note: mu should be bounded to [-2, 2] via tanh, logvar to [-5, 2] via tanh by encoder
+    # Emergency clipping as defensive safeguard (should rarely trigger with tanh bounds)
+    mu = mx.clip(mu, -3.0, 3.0)  # Emergency clip slightly wider than expected bounds
+    logvar = mx.clip(logvar, -6.0, 3.0)  # Emergency clip
+    
     # Compute variance from log-variance
+    # With logvar ∈ [-5, 2], var = exp(logvar) ∈ [0.0067, 7.39] (very safe)
     var = mx.exp(logvar)
     
-    # KL divergence for each dimension
-    # KL = -0.5 * (1 + log_var - mu^2 - var)
+    # Numerically stable KL divergence: KL = -0.5 * (1 + logvar - mu^2 - var)
+    # This formula is mathematically correct for KL(q(z|x) || p(z)) where p(z) = N(0, I)
     kl_per_dim = -0.5 * (1.0 + logvar - mx.square(mu) - var)
+    
+    # Ensure KL is non-negative (should always be true for valid distributions)
+    kl_per_dim = mx.maximum(kl_per_dim, 0.0)
     
     # Apply free bits constraint: ensure minimum KL per dimension
     if free_bits > 0.0:

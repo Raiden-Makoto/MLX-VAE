@@ -5,6 +5,9 @@ class MoleculeDataset:
     """
     Dataset for tokenized molecules with properties
     Designed for MLX with lazy evaluation
+    
+    IMPORTANT: All datasets (train/val/test) should use the SAME normalization
+    statistics (from training set) to avoid distribution mismatch.
     """
     
     def __init__(
@@ -12,7 +15,9 @@ class MoleculeDataset:
         tokenized_molecules: list,
         properties: np.ndarray,
         max_length: int = 120,
-        pad_token: int = 0
+        pad_token: int = 0,
+        properties_mean: np.ndarray = None,
+        properties_std: np.ndarray = None
     ):
         """
         Args:
@@ -20,6 +25,8 @@ class MoleculeDataset:
             properties: Array of shape [n_samples, num_properties]
             max_length: Maximum sequence length for padding
             pad_token: Padding token index
+            properties_mean: Optional precomputed mean for normalization (from train set)
+            properties_std: Optional precomputed std for normalization (from train set)
         """
         self.molecules = tokenized_molecules
         self.max_length = max_length
@@ -28,9 +35,22 @@ class MoleculeDataset:
         # Convert to numpy arrays
         self.properties = np.array(properties, dtype=np.float32)
         
-        # Compute normalization statistics
-        self.properties_mean = self.properties.mean(axis=0, keepdims=True)
-        self.properties_std = self.properties.std(axis=0, keepdims=True)
+        # Use provided normalization stats (from train set) or compute from this dataset
+        if properties_mean is not None and properties_std is not None:
+            # Use provided stats (typically from training set)
+            self.properties_mean = np.array(properties_mean, dtype=np.float32)
+            self.properties_std = np.array(properties_std, dtype=np.float32)
+        else:
+            # Compute normalization statistics from this dataset
+            # (Should only happen for training set)
+            self.properties_mean = self.properties.mean(axis=0, keepdims=True)
+            self.properties_std = self.properties.std(axis=0, keepdims=True)
+        
+        # Ensure proper shape
+        if self.properties_mean.ndim == 1:
+            self.properties_mean = self.properties_mean[np.newaxis, :]
+        if self.properties_std.ndim == 1:
+            self.properties_std = self.properties_std[np.newaxis, :]
         
         # Avoid division by zero
         self.properties_std = np.where(
@@ -39,7 +59,7 @@ class MoleculeDataset:
             self.properties_std
         )
         
-        # Normalize properties
+        # Normalize properties using the provided/computed statistics
         self.properties_normalized = (
             (self.properties - self.properties_mean) / self.properties_std
         )
