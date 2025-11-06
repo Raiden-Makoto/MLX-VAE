@@ -113,6 +113,67 @@ class ARCVAETrainerWithLoss:
         ratio = max(0.3, 0.7 - 0.4 * progress)  # Start at 0.7, decay to 0.3
         return float(ratio)
     
+    def _compute_true_train_loss(self, epoch: int, num_batches: int = 10) -> Dict[str, float]:
+        """
+        Compute training loss WITHOUT teacher forcing for fair comparison
+        
+        This gives the true generative performance, not inflated by TF.
+        """
+        beta = self.compute_beta(epoch)
+        total_loss = 0.0
+        total_recon = 0.0
+        total_kl = 0.0
+        total_collapse = 0.0
+        total_prop = 0.0
+        num_batches_actual = 0
+        
+        for batch_idx, (molecules, conditions) in enumerate(
+            self.dataset.to_batches(self.batch_size, shuffle=False)
+        ):
+            if batch_idx >= num_batches:
+                break
+            
+            mx.eval(molecules, conditions)
+            
+            # CRITICAL: teacher_forcing_ratio = 0.0
+            loss_dict = complete_vae_loss(
+                encoder=self.encoder,
+                decoder=self.decoder,
+                property_predictor=self.property_predictor,
+                x=molecules,
+                conditions=conditions,
+                beta=beta,
+                lambda_prop=self.lambda_prop,
+                lambda_collapse=self.lambda_collapse,
+                teacher_forcing_ratio=0.0,  # No teacher forcing!
+                free_bits=self.free_bits,
+                lambda_mi=self.lambda_mi,
+                target_mi=4.85
+            )
+            
+            mx.eval(
+                loss_dict['total_loss'],
+                loss_dict['recon_loss'],
+                loss_dict['kl_loss'],
+                loss_dict['collapse_penalty'],
+                loss_dict['prop_loss']
+            )
+            
+            total_loss += float(loss_dict['total_loss'])
+            total_recon += float(loss_dict['recon_loss'])
+            total_kl += float(loss_dict['kl_loss'])
+            total_collapse += float(loss_dict['collapse_penalty'])
+            total_prop += float(loss_dict['prop_loss'])
+            num_batches_actual += 1
+        
+        return {
+            'loss': total_loss / num_batches_actual if num_batches_actual > 0 else 0.0,
+            'recon': total_recon / num_batches_actual if num_batches_actual > 0 else 0.0,
+            'kl': total_kl / num_batches_actual if num_batches_actual > 0 else 0.0,
+            'collapse': total_collapse / num_batches_actual if num_batches_actual > 0 else 0.0,
+            'prop': total_prop / num_batches_actual if num_batches_actual > 0 else 0.0
+        }
+    
     def train_epoch(
         self,
         epoch: int,
@@ -134,10 +195,13 @@ class ARCVAETrainerWithLoss:
         beta = self.compute_beta(epoch)
         teacher_forcing_ratio = self.compute_teacher_forcing_ratio(epoch, total_epochs)
         
-        # Training
+        # Train with teacher forcing (for learning)
         train_metrics = self._train_epoch_batches(beta, teacher_forcing_ratio)
         
-        # Validation
+        # Compute true training loss (without TF) for fair comparison
+        true_train_metrics = self._compute_true_train_loss(epoch, num_batches=20)
+        
+        # Validation (already no TF)
         if val_dataset is not None:
             val_metrics = self._validate(val_dataset, beta)
         else:
@@ -156,12 +220,13 @@ class ARCVAETrainerWithLoss:
         mx.eval(mi)
         mi_value = float(mi)
         
+        # Return comparable metrics (both without teacher forcing)
         metrics = {
-            'train_loss': train_metrics['loss'],
-            'train_recon': train_metrics['recon'],
-            'train_kl': train_metrics['kl'],
-            'train_collapse': train_metrics['collapse'],
-            'train_prop': train_metrics['prop'],
+            'train_loss': true_train_metrics['loss'],  # Now fair!
+            'train_recon': true_train_metrics['recon'],
+            'train_kl': true_train_metrics['kl'],
+            'train_collapse': true_train_metrics['collapse'],
+            'train_prop': true_train_metrics['prop'],
             'val_loss': val_metrics.get('loss', 0.0),
             'val_recon': val_metrics.get('recon', 0.0),
             'val_kl': val_metrics.get('kl', 0.0),
@@ -267,7 +332,7 @@ class ARCVAETrainerWithLoss:
                 self.decoder_optimizer.state
             )
             
-            # Get full loss breakdown for diagnostics (first batch of epoch and periodically)
+            # Sample loss components periodically for tracking (without printing)
             if batch_idx == 0 or batch_idx % 25 == 0:
                 loss_dict = complete_vae_loss(
                     encoder=self.encoder,
@@ -287,74 +352,15 @@ class ARCVAETrainerWithLoss:
                 
                 recon = float(loss_dict['recon_loss'])
                 kl = float(loss_dict['kl_loss'])
-                weighted_kl = float(beta * loss_dict['kl_loss'])
                 collapse = float(loss_dict['collapse_penalty'])
                 prop = float(loss_dict['prop_loss'])
-                mi_val = float(loss_dict['mutual_info'])
-                mi_penalty = float(loss_dict['mi_penalty'])
-                total = float(loss_dict['total_loss'])
-
+                
                 # Accumulate sampled components
                 recon_sum += recon
                 kl_sum += kl
                 collapse_sum += collapse
                 prop_sum += prop
                 comp_count += 1
-                
-                # CRITICAL: Check for sign errors (negative losses are WRONG)
-                issues = []
-                if recon < 0:
-                    issues.append(f"❌ Recon loss is NEGATIVE: {recon:.4f} (should be ≥ 0)")
-                if kl < 0:
-                    issues.append(f"❌ KL loss is NEGATIVE: {kl:.4f} (should be ≥ 0)")
-                if collapse < 0:
-                    issues.append(f"⚠️  Collapse penalty is negative: {collapse:.4f}")
-                if total < 0:
-                    issues.append(f"❌ TOTAL LOSS is NEGATIVE: {total:.4f} (CRITICAL BUG!)")
-                
-                if batch_idx == 0:
-                    # 0) Inputs check
-                    print("\n" + "=" * 80)
-                    print("CHECKING LOSS FUNCTION INPUTS")
-                    print("=" * 80)
-                    print(f"     Property predictor present: {self.property_predictor is not None}")
-                    # Basic module presence checks
-                    has_fc_mu = hasattr(self.encoder, 'fc_mu')
-                    has_fc_out = hasattr(self.decoder, 'fc_out')
-                    print(f"     Encoder has fc_mu: {has_fc_mu}")
-                    print(f"     Decoder has fc_out: {has_fc_out}")
-
-                    # 1) Loss breakdown
-                    print(f"\n   Loss breakdown (batch 0):")
-                    print(f"     Recon: {recon:.4f} {'✅' if recon >= 0 else '❌ NEGATIVE!'}")
-                    print(f"     KL: {kl:.4f} {'✅' if kl >= 0 else '❌ NEGATIVE!'}")
-                    print(f"     Weighted KL (β={beta:.4f}×KL): {weighted_kl:.4f}")
-                    print(f"     Collapse penalty: {collapse:.4f}")
-                    print(f"     Property loss: {prop:.4f}")
-                    print(f"     MI: {mi_val:.4f}, MI penalty: {mi_penalty:.4f}")
-                    print(f"     TOTAL: {total:.4f} {'✅' if total >= 0 else '❌ NEGATIVE!'}")
-
-                    # Derived beta check
-                    derived_beta = weighted_kl / max(kl, 1e-8)
-                    print(f"\n     Derived β from (weighted_kl / kl): {derived_beta:.4f}")
-                    
-                    if issues:
-                        print(f"\n   ⚠️  CRITICAL ISSUES DETECTED:")
-                        for issue in issues:
-                            print(f"     {issue}")
-                        print(f"   → Check loss function formulas for sign errors!")
-
-                    # 2) Decoder forward pass diagnostic
-                    print(f"\n   Decoder forward pass diagnostic:")
-                    z_test = mx.random.normal((4, self.encoder.latent_dim))
-                    cond_dims = getattr(self.encoder, 'num_conditions', 1)
-                    cond_test = mx.zeros((4, cond_dims))
-                    logits_test = self.decoder(z_test, cond_test, target_seq=molecules[:4, :])
-                    mx.eval(z_test, logits_test)
-                    print(f"     z std: {float(mx.std(z_test)):.4f}")
-                    print(f"     logits range: [{float(mx.min(logits_test)):.4f}, {float(mx.max(logits_test)):.4f}]")
-                    print(f"     logits mean/std: {float(mx.mean(logits_test)):.4f}/{float(mx.std(logits_test)):.4f}")
-                    print("=" * 80)
             
             # Accumulate loss
             loss_val = float(loss)

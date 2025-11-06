@@ -22,7 +22,7 @@ def main():
                         help='Path to dataset JSON file')
     
     # Model arguments
-    parser.add_argument('--vocab_size', type=int, default=95, help='Vocabulary size')
+    parser.add_argument('--vocab_size', type=int, default=80, help='Vocabulary size')
     parser.add_argument('--embedding_dim', type=int, default=128, help='Embedding dimension')
     parser.add_argument('--hidden_dim', type=int, default=256, help='Hidden dimension')
     parser.add_argument('--latent_dim', type=int, default=128, help='Latent dimension')
