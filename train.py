@@ -31,12 +31,12 @@ def main():
     parser.add_argument('--dropout', type=float, default=0.2, help='Dropout rate')
     
     # Training arguments
-    parser.add_argument('--epochs', type=int, default=50, help='Number of epochs')
-    parser.add_argument('--batch_size', type=int, default=64, help='Batch size')
-    parser.add_argument('--learning_rate', type=float, default=5e-5, help='Learning rate')
+    parser.add_argument('--epochs', type=int, default=30, help='Number of epochs')
+    parser.add_argument('--batch_size', type=int, default=32, help='Batch size')
+    parser.add_argument('--learning_rate', type=float, default=2e-4, help='Learning rate')
     parser.add_argument('--beta_start', type=float, default=0.0, help='Initial beta value')
     parser.add_argument('--beta_end', type=float, default=0.05, help='Final beta value')
-    parser.add_argument('--beta_warmup_epochs', type=int, default=35, help='Beta warmup epochs')
+    parser.add_argument('--beta_warmup_epochs', type=int, default=20, help='Beta warmup epochs')
     parser.add_argument('--lambda_prop', type=float, default=0.1, help='Property loss weight')
     parser.add_argument('--lambda_collapse', type=float, default=0.001, help='Posterior collapse weight')
     parser.add_argument('--free_bits', type=float, default=1.0, help='Free bits constraint (min KL per dimension)')

@@ -110,7 +110,7 @@ class ARCVAETrainerWithLoss:
     def compute_teacher_forcing_ratio(self, epoch: int, total_epochs: int) -> float:
         """Compute teacher forcing ratio with decay"""
         progress = epoch / total_epochs
-        ratio = max(0.3, 0.7 - 0.4 * progress)  # Start at 0.7, decay to 0.3
+        ratio = max(0.5, 0.9 - 0.4 * progress)  # Start at 0.9, decay to 0.5 over all epochs
         return float(ratio)
     
     def _compute_true_train_loss(self, epoch: int, num_batches: int = 10) -> Dict[str, float]:
